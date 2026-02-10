@@ -657,6 +657,8 @@ def compute_maxes(
             mx = float(s.quantile(0.95))
             maxes[lab] = mx if mx > 0 else 1.0
     return maxes
+  
+_compute_maxes = compute_maxes
 
 
 def generate_radar_chart_for_player(
