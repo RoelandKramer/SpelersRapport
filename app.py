@@ -829,7 +829,7 @@ POSITION_TO_NUMBER: Dict[str, int] = {
     "RightWing": 7,
     "Right Wing": 7,
     "Left Wing": 11,
-    "Left Wing": 11,
+    "LeftWing": 11,
     "Striker": 9,
     "CentreForward": 9,
     "Centre Forward": 9,
