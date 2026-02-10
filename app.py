@@ -838,66 +838,31 @@ POSITION_TO_NUMBER: Dict[str, int] = {
 
 MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
 SECOND_BLUE = RGBColor(0, 142, 204)   # adjust to your exact template light-blue if needed
-
-def _iter_all_shapes(slide):
-    for shape in slide.shapes:
-        yield shape
-        # Group shapes (recursive)
-        if shape.shape_type == 6 and hasattr(shape, "shapes"):  # MSO_SHAPE_TYPE.GROUP == 6
-            for sub in shape.shapes:
-                yield sub
-
-
-def _extract_int(text: str) -> Optional[int]:
-    if not text:
-        return None
-    m = re.search(r"\b(\d{1,2})\b", text.strip())
-    return int(m.group(1)) if m else None
-
-
 def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
     if not ordered_positions:
         return
 
-    # normalize positions coming from API (handles "RightWing" vs "RightWinger", etc.)
-    ordered_positions = [str(p or "").strip() for p in ordered_positions if str(p or "").strip()]
-
     main_num = POSITION_TO_NUMBER.get(ordered_positions[0])
-    secondary_nums = [POSITION_TO_NUMBER.get(p) for p in ordered_positions[1:3]]
-    secondary_nums = [n for n in secondary_nums if n is not None]
+    secondary_nums = [
+        POSITION_TO_NUMBER.get(p)
+        for p in ordered_positions[1:3]
+        if p in POSITION_TO_NUMBER
+    ]
 
-    for shape in _iter_all_shapes(slide):
-        # Table cells
-        if getattr(shape, "has_table", False):
-            tbl = shape.table
-            for row in tbl.rows:
-                for cell in row.cells:
-                    n = _extract_int(cell.text)
-                    if n is None:
-                        continue
-                    if main_num is not None and n == main_num:
-                        cell.fill.solid()
-                        cell.fill.fore_color.rgb = MAIN_BLUE
-                    elif n in secondary_nums:
-                        cell.fill.solid()
-                        cell.fill.fore_color.rgb = SECOND_BLUE
-            continue
-
-        # Normal text shapes
+    for shape in slide.shapes:
         if not getattr(shape, "has_text_frame", False):
             continue
-
-        n = _extract_int(shape.text_frame.text)
-        if n is None:
+        txt = (shape.text_frame.text or "").strip()
+        if not txt.isdigit():
             continue
 
-        if main_num is not None and n == main_num:
+        num = int(txt)
+        if main_num is not None and num == main_num:
             shape.fill.solid()
             shape.fill.fore_color.rgb = MAIN_BLUE
-        elif n in secondary_nums:
+        elif num in secondary_nums:
             shape.fill.solid()
             shape.fill.fore_color.rgb = SECOND_BLUE
-
 
 # ----------------------------
 # Template filling (full notebook-style flow)
