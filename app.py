@@ -72,7 +72,7 @@ FC_DEN_BOSCH_PLAYERS = [
     {"name": "Pepijn van de Merbel", "player_id": 52270},
 ]
 
-
+players_source = FC_DEN_BOSCH_PLAYERS
 
 player_label = st.selectbox(
     "Player (FC Den Bosch only)",
