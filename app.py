@@ -72,19 +72,7 @@ FC_DEN_BOSCH_PLAYERS = [
     {"name": "Pepijn van de Merbel", "player_id": 52270},
 ]
 
-players_source = FC_DEN_BOSCH_PLAYERS  # fallback
 
-if st.session_state.get("access_token") and st.session_state.get("api_base"):
-    if "fcdb_players" not in st.session_state:
-        try:
-            st.session_state["fcdb_players"] = fetch_fc_den_bosch_players(
-                st.session_state["api_base"],
-                st.session_state["access_token"],
-            )
-        except Exception as e:
-            st.warning(f"Could not fetch FC Den Bosch players from API (using fallback list). Reason: {e}")
-
-    players_source = st.session_state.get("fcdb_players") or FC_DEN_BOSCH_PLAYERS
 
 player_label = st.selectbox(
     "Player (FC Den Bosch only)",
@@ -1221,15 +1209,12 @@ def main() -> None:
     left, right = st.columns([1, 1])
 
     with left:
-        players_source = st.session_state.get("fcdb_players") or FC_DEN_BOSCH_PLAYERS
-    
         player_label = st.selectbox(
             "Player (FC Den Bosch only)",
-            options=[p["name"] for p in players_source],
+            options=[p["name"] for p in FC_DEN_BOSCH_PLAYERS],
             index=0,
         )
-        player_id = next(p["player_id"] for p in players_source if p["name"] == player_label)
-
+        player_id = next(p["player_id"] for p in FC_DEN_BOSCH_PLAYERS if p["name"] == player_label)
     with right:
         perf_file = st.file_uploader(
             "Optional performance chart (PNG/JPG). If not provided, it will be skipped.",
