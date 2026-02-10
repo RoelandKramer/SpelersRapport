@@ -740,20 +740,21 @@ def generate_radar_chart_for_player(
         ax.text(ang, R_VALUE, val_line, fontsize=13, fontweight="bold", ha=ha, va="center")
 
     # --- FINAL PLOT STYLING (UPDATED FOR 50% TRANSPARENCY) ---
+    # --- FINAL PLOT STYLING: whole image white @ 50% + circle white @ 50% ---
     ax.spines["polar"].set_visible(False)
     
-    # This sets the area outside the circle to be fully transparent
-    fig.patch.set_alpha(0) 
-    fig.patch.set_facecolor((1, 1, 1, 0.5))
-    # This sets the background of the radar circle to White with 50% opacity
-    # (1, 1, 1, 0.5) = (Red, Green, Blue, Alpha)
-    ax.set_facecolor((1, 1, 1, 0.5)) 
-    ax.patch.set_facecolor((1, 1, 1, 0.5))
-
+    # Rectangle background (outside the radar circle)
+    fig.patch.set_facecolor((1, 1, 1, 0.5))   # white, 50% alpha
+    
+    # Circle background (inside the polar axes)
+    ax.patch.set_facecolor((1, 1, 1, 0.5))    # white, 50% alpha
+    
     plt.tight_layout()
-    # Save with transparent=True to ensure the fig.patch remains clear
+    
+    # IMPORTANT: transparent=False, otherwise alpha gets overridden
     fig.savefig(out_png, bbox_inches="tight", transparent=False)
     plt.close(fig)
+
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
 
