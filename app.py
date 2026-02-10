@@ -811,7 +811,7 @@ POSITION_TO_NUMBER: Dict[str, int] = {
     # Back line
     "RightBack": 2,
     "RightFullback": 2,
-    "Right Back": 2
+    "Right Back": 2,
     "Centre Back": 3,
     "CentreBack": 3,
     "LeftBack": 4,
