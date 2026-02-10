@@ -67,6 +67,22 @@ FC_DEN_BOSCH_PLAYERS = [
     {"name": "Kevin Felida", "player_id": 35836},
 ]
 
+SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
+
+def normalize_season_label(name: str) -> str:
+    """
+    Normalize season strings to 'YYYY/YYYY' when possible.
+    Examples:
+      '2023/2024 Regular Season' -> '2023/2024'
+      '2023-2024' -> '2023/2024'
+      '2023/24' -> '' (unknown)  # add more logic if needed
+    """
+    if not name:
+        return ""
+    m = SEASON_RE.search(str(name))
+    if not m:
+        return ""
+    return f"{m.group(1)}/{m.group(2)}"
 
 # ----------------------------
 # App configuration (match your repo file names exactly)
@@ -349,7 +365,8 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
 
     season_team_best: Dict[str, Dict[str, Any]] = {}
     for it in x_items:
-        sname = (it.get("season") or {}).get("name") or ""
+        raw_sname = (it.get("season") or {}).get("name") or ""
+        sname = normalize_season_label(raw_sname) or str(raw_sname).strip()
         tname = (it.get("team") or {}).get("name") or ""
         mins = (it.get("metrics") or {}).get("minutesPlayed") or 0
         if not sname or not tname:
