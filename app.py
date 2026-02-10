@@ -78,6 +78,12 @@ NAME_R_MULT = {
 DEFAULT_NAME_R = 1.33
 
 
+FC_DEN_BOSCH_PLAYERS = [
+    {"name": "Kevin Monzialo", "player_id": 40665},
+    {"name": "Kevin Felida", "player_id": 35836},
+]
+
+
 # ----------------------------
 # App configuration
 # ----------------------------
@@ -648,26 +654,17 @@ You do **not** enter secrets in the UI.
     left, right = st.columns([1, 1])
 
     with left:
-        player_name = st.selectbox("Player", options=players, index=0)
-
-        # Optional: player_id if bench has it
-        player_id: Optional[int] = None
-        if "player_id" in df_bench.columns:
-            try:
-                row = pick_player_row_by_name(df_bench, player_name)
-                pid = row.get("player_id")
-                if pd.notna(pid):
-                    player_id = int(pid)
-            except Exception:
-                player_id = None
-
-        if player_id is None:
-            player_id_input = st.text_input("Player ID (optional, for API enrichment)", value="")
-            if player_id_input.strip():
-                try:
-                    player_id = int(player_id_input.strip())
-                except ValueError:
-                    st.warning("Player ID must be an integer (or leave empty).")
+      # Step 2 — Select player and generate report
+      
+      player_label = st.selectbox(
+          "Player (FC Den Bosch only)",
+          options=[p["name"] for p in FC_DEN_BOSCH_PLAYERS],
+          index=0,
+      )
+      
+      player_id = next(p["player_id"] for p in FC_DEN_BOSCH_PLAYERS if p["name"] == player_label)
+      player_name = player_label
+      warning("Player ID must be an integer (or leave empty).")
 
     with right:
         perf_file = st.file_uploader(
