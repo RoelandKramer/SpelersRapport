@@ -300,8 +300,8 @@ def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
 
     changed = False
 
-    # Run-level replacement
     for paragraph in shape.text_frame.paragraphs:
+        # 1) Try run-level replacements (preserves formatting best)
         for run in paragraph.runs:
             t = run.text or ""
             if not t:
@@ -312,15 +312,17 @@ def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
                 run.text = new_t
                 changed = True
 
-    # Fallback: tokens split across runs
-    for paragraph in shape.text_frame.paragraphs:
-        combined = "".join(r.text for r in paragraph.runs)
-        if "{{" in combined or "}" in combined:
+        # 2) If token spans runs, rebuild text WITHOUT clearing paragraph formatting
+        combined = "".join((r.text or "") for r in paragraph.runs)
+        if ("{{" in combined or "}" in combined) and paragraph.runs:
             new_combined = TOKEN_RE_DOUBLE.sub(lambda m: values.get(m.group(1), m.group(0)), combined)
             new_combined = TOKEN_RE_SINGLE.sub(lambda m: values.get(m.group(1), m.group(0)), new_combined)
+
             if new_combined != combined:
-                paragraph.clear()
-                paragraph.add_run().text = new_combined
+                # Keep paragraph properties; reuse first run, blank the rest
+                paragraph.runs[0].text = new_combined
+                for r in paragraph.runs[1:]:
+                    r.text = ""
                 changed = True
 
     return changed
