@@ -761,14 +761,27 @@ def generate_radar_chart_for_player(
 def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[str]:
     if not player_name or not os.path.isdir(photos_dir):
         return None
-    direct = os.path.join(photos_dir, f"{player_name}.png")
-    if os.path.exists(direct):
-        return direct
-    low = f"{player_name.lower()}.png"
+
+    candidates = [
+        f"{player_name}.png",
+        f"{player_name}.jpg",
+        f"{player_name}.jpeg",
+        f"{player_name.strip()}.png",
+    ]
+
+    for name in candidates:
+        p = os.path.join(photos_dir, name)
+        if os.path.exists(p):
+            return p
+
+    # case-insensitive fallback
+    target_low = f"{player_name.lower().strip()}.png"
     for f in os.listdir(photos_dir):
-        if f.lower() == low:
+        if f.lower() == target_low:
             return os.path.join(photos_dir, f)
+
     return None
+
 
 
 # ----------------------------
@@ -896,7 +909,10 @@ def fill_template_full(
 
     # Player image bytes (local first; fallback API imageUrl)
     player_img_bytes: Optional[bytes] = None
-    local_path = get_local_player_image_path(values.get("PLAYER_NAME") or player_name_ui, PLAYER_PHOTOS_DIR)
+    local_path = (
+        get_local_player_image_path(values.get("PLAYER_NAME") or "", PLAYER_PHOTOS_DIR)
+        or get_local_player_image_path(player_name_ui, PLAYER_PHOTOS_DIR)
+    )
     if local_path:
         with open(local_path, "rb") as f:
             player_img_bytes = f.read()
@@ -932,25 +948,22 @@ def fill_template_full(
         }
 
     for slide in prs.slides:
-        apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
-
         if player_img_bytes:
-          inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
-
+            inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
+    
         inserted["radar"] += insert_image_at_token_exact(slide, "{{RADAR_CHART}}", radar_png)
-
-        # Template uses {{PERFORMANCE_CHART}} (as you observed)
+    
         if perf_png:
             inserted["performance"] += insert_image_at_token_exact(slide, "{{PERFORMANCE_CHART}}", perf_png)
             inserted["performance"] += replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_upload_bytes)
-
-        # Optional second placeholder
-        if performance_upload_bytes:
-            inserted["performance"] += replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_upload_bytes)
-
+    
+        # 1) replace text first
         for shape in slide.shapes:
             if replace_tokens_in_shape(shape, values):
                 inserted["text_shapes_changed"] += 1
+    
+        # 2) THEN color positions (now digits exist)
+        apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
 
     prs.save(out_pptx_path)
 
