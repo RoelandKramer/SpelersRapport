@@ -62,10 +62,26 @@ from pptx import Presentation
 # ----------------------------
 # Hardcoded FC Den Bosch players (for now)
 # ----------------------------
-FC_DEN_BOSCH_PLAYERS = [
-    {"name": "Kevin Monzialo", "player_id": 40665},
-    {"name": "Kevin Felida", "player_id": 35836},
-]
+players_source = FC_DEN_BOSCH_PLAYERS  # fallback
+
+if st.session_state.get("access_token") and st.session_state.get("api_base"):
+    if "fcdb_players" not in st.session_state:
+        try:
+            st.session_state["fcdb_players"] = fetch_fc_den_bosch_players(
+                st.session_state["api_base"],
+                st.session_state["access_token"],
+            )
+        except Exception as e:
+            st.warning(f"Could not fetch FC Den Bosch players from API (using fallback list). Reason: {e}")
+
+    players_source = st.session_state.get("fcdb_players") or FC_DEN_BOSCH_PLAYERS
+
+player_label = st.selectbox(
+    "Player (FC Den Bosch only)",
+    options=[p["name"] for p in players_source],
+    index=0,
+)
+player_id = next(p["player_id"] for p in players_source if p["name"] == player_label)
 
 SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
 
@@ -182,6 +198,40 @@ def generate_access_token_from_secrets() -> str:
     if not token:
         raise RuntimeError(f"No access_token in response: {payload}")
     return str(token)
+
+def fetch_fc_den_bosch_players(api_base: str, token: str) -> List[Dict[str, Any]]:
+    """
+    Returns [{"name": "...", "player_id": 123}, ...] for FC Den Bosch.
+    This assumes the API supports fetching teams and players by team id.
+    """
+    # 1) Find the team id
+    teams = api_get_json(api_base, token, "/api/v2/teams", params={"Limit": 200})
+    team_items = items_of(teams)
+
+    team = next(
+        (t for t in team_items if (t.get("name") or "").strip().lower() == "fc den bosch"),
+        None,
+    )
+    if not team:
+        raise RuntimeError("Could not find team 'FC Den Bosch' via /api/v2/teams")
+
+    team_id = int(team["id"])
+
+    # 2) Fetch players for that team
+    players = api_get_json(api_base, token, "/api/v2/players", params={"TeamIds": team_id, "Limit": 500})
+    player_items = items_of(players)
+
+    out = []
+    for p in player_items:
+        info = p.get("info") or {}
+        pid = p.get("id")
+        name = info.get("footballName") or info.get("name") or p.get("name") or ""
+        if pid and name:
+            out.append({"name": str(name).strip(), "player_id": int(pid)})
+
+    # stable sort for UI
+    out = sorted(out, key=lambda x: x["name"])
+    return out
 
 
 # ----------------------------
@@ -1161,12 +1211,14 @@ def main() -> None:
     left, right = st.columns([1, 1])
 
     with left:
+        players_source = st.session_state.get("fcdb_players") or FC_DEN_BOSCH_PLAYERS
+    
         player_label = st.selectbox(
             "Player (FC Den Bosch only)",
-            options=[p["name"] for p in FC_DEN_BOSCH_PLAYERS],
+            options=[p["name"] for p in players_source],
             index=0,
         )
-        player_id = next(p["player_id"] for p in FC_DEN_BOSCH_PLAYERS if p["name"] == player_label)
+        player_id = next(p["player_id"] for p in players_source if p["name"] == player_label)
 
     with right:
         perf_file = st.file_uploader(
