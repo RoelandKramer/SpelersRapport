@@ -58,7 +58,6 @@ import requests
 import streamlit as st
 from pptx import Presentation
 
-st.write("Secrets keys:", list(st.secrets.keys()))
 
 # ----------------------------
 # Hardcoded FC Den Bosch players (for now)
@@ -745,14 +744,15 @@ def generate_radar_chart_for_player(
     
     # This sets the area outside the circle to be fully transparent
     fig.patch.set_alpha(0) 
-    
+    fig.patch.set_facecolor((1, 1, 1, 0.5))
     # This sets the background of the radar circle to White with 50% opacity
     # (1, 1, 1, 0.5) = (Red, Green, Blue, Alpha)
     ax.set_facecolor((1, 1, 1, 0.5)) 
-    
+    ax.patch.set_facecolor((1, 1, 1, 0.5))
+
     plt.tight_layout()
     # Save with transparent=True to ensure the fig.patch remains clear
-    fig.savefig(out_png, bbox_inches="tight", transparent=True)
+    fig.savefig(out_png, bbox_inches="tight", transparent=fALSE)
     plt.close(fig)
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
