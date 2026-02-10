@@ -848,7 +848,7 @@ def fill_template_full(
     radar_used = generate_radar_chart_for_player(
         df_bench=df_bench,
         player_name=values.get("PLAYER_NAME") or player_name_ui,
-        out_png_path=radar_png,
+        out_png=radar_png,
         custom_maxes=CUSTOM_MAXES,
         team_name=values.get("CLUB_2024/2025") or values.get("CLUB_2023/2024") or None,
     )
