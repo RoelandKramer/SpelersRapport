@@ -366,7 +366,6 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     abb_nat = f"{flag}⎟{nat_alpha3}" if flag and nat_alpha3 else (nat_alpha3 or "")
 
     pos_list = info.get("positions") or []
-    values["_POSITIONS_ORDERED"] = pos_list  # <-- add this
     main_position = prettify_camel(pos_list[0]) if len(pos_list) >= 1 else ""
     sec_position = prettify_camel(pos_list[1]) if len(pos_list) >= 2 else ""
 
@@ -403,6 +402,8 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         "ABB_NATIONALITY": abb_nat,
         "IMAGE": "{IMAGE}",
         "PRESTATIES_FIGURE": "{PRESTATIES_FIGURE}",
+        "_POSITIONS_ORDERED": pos_list,   # ✅ put it here
+
     }
 
     values["_PLAYER_IMAGE_URL"] = info.get("imageUrl") or ""
