@@ -106,9 +106,6 @@ class AuthConfig:
 class ApiConfig:
     base_url: str
 
-st.write("Secrets keys:", list(st.secrets.keys()))
-st.write("Has auth?", "auth" in st.secrets)
-
 # ----------------------------
 # Utilities
 # ----------------------------
