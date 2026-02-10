@@ -849,6 +849,8 @@ def fill_template_full(
     token: str,
     performance_upload_bytes: Optional[bytes],
 ) -> Dict[str, Any]:
+    inserted = {"player_image": 0, "radar": 0, "performance": 0, "text_shapes_changed": 0}
+
     if not os.path.exists(template_path):
         raise FileNotFoundError(...)
 
