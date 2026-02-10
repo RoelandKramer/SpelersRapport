@@ -757,7 +757,6 @@ def generate_radar_chart_for_player(
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
 
-
 def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[str]:
     if not player_name or not os.path.isdir(photos_dir):
         return None
