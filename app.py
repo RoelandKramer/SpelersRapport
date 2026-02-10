@@ -879,7 +879,6 @@ def fill_template_full(
     prs = Presentation(template_path)
 
     # Build values (old logic)
-    values = build_personal_values(api_base, token, int(player_id))
 
     # Seasons + latest
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
