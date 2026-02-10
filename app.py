@@ -804,10 +804,37 @@ def insert_image_at_token_exact(slide, token: str, image_path: str) -> int:
     return replaced
 from pptx.dml.color import RGBColor
 
-# Template-specific: adapt if your template uses different position labels.
-POSITION_TO_NUMBER = { "Left Wing": 11, "Centre Forward": 9, "Right Wing": 7, "Centre Midfield": 8, 
-                      "Attacking Midfield": 10, "Defensive Midfield": 6, "Left Back": 5, 
-                      "Centre Back": 4, "Right Back": 2, "Goalkeeper": 1, }
+POSITION_TO_NUMBER: Dict[str, int] = {
+    # GK
+    "Goalkeeper": 1,
+
+    # Back line
+    "RightBack": 2,
+    "RightFullback": 2,
+    "Right Back": 2
+    "Centre Back": 3,
+    "CentreBack": 3,
+    "LeftBack": 4,
+    "Left Back": 4,
+
+    # Midfield (common API variants)
+    "DefensiveMidfield": 6,
+    "Defensive Midfield": 6,
+    "CentreMidfield": 8,
+    "Centre Midfield": 8,
+    "AttackingMidfield": 10,
+    "Attacking Midfield": 10,
+
+    # Wings / forwards
+    "RightWing": 7,
+    "Right Wing": 7,
+    "Left Wing": 11,
+    "Left Wing": 11,
+    "Striker": 9,
+    "CentreForward": 9,
+    "Centre Forward": 9,
+}
+
 
 MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
 SECOND_BLUE = RGBColor(0, 142, 204)   # adjust to your exact template light-blue if needed
