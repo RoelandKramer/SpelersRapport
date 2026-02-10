@@ -71,9 +71,9 @@ FC_DEN_BOSCH_PLAYERS = [
 # ----------------------------
 # App configuration (match your repo file names exactly)
 # ----------------------------
-TEMPLATE_PPTX_PATH = "powerpoint_template.pptx"
-BENCH_CSV_PATH = "bench.csv"
-PLAYER_PHOTOS_DIR = "speler_foto's"
+TEMPLATE_PPTX_PATH = "powerpoint template.pptx"
+BENCH_CSV_PATH = "df_bench.csv"
+PLAYER_PHOTOS_DIR = "speler foto's"
 
 TOKEN_HINT = "Generate access token first (required)."
 
