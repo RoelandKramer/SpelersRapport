@@ -374,6 +374,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         prev = season_team_best.get(sname)
         if prev is None or mins > (prev.get("mins") or 0):
             season_team_best[sname] = {"team": tname, "mins": mins}
+    st.write("season_team_best keys:", sorted(season_team_best.keys())[:20])
 
     nats = info.get("nationalities") or []
     nat_name = (nats[0].get("name") if nats else None) or (info.get("birthCountry") or {}).get("name") or ""
