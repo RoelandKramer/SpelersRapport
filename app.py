@@ -664,7 +664,6 @@ You do **not** enter secrets in the UI.
       
       player_id = next(p["player_id"] for p in FC_DEN_BOSCH_PLAYERS if p["name"] == player_label)
       player_name = player_label
-      warning("Player ID must be an integer (or leave empty).")
 
     with right:
         perf_file = st.file_uploader(
