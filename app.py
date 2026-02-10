@@ -1107,7 +1107,7 @@ def main() -> None:
         if perf_file:
             st.image(perf_bytes, caption="Uploaded performance chart", use_container_width=True)
 
-    generate = st.button("Generate PPTX (and PDF if available)", type="primary")
+    generate = st.button("Generate PPTX and PDF", type="primary")
 
     if generate:
         if not st.session_state["access_token"]:
