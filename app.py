@@ -106,11 +106,8 @@ NAME_R_MULT = {
 DEFAULT_NAME_R = 1.33
 
 
-# ----------------------------
-# Secrets / Auth
-# ----------------------------
 @dataclass(frozen=True)
-class FlatSecrets:
+class SectionSecrets:
     token_url: str
     grant_type: str
     username: str
@@ -121,37 +118,49 @@ class FlatSecrets:
     base_url: str
 
 
-def load_flat_secrets() -> FlatSecrets:
-    s = st.secrets
-    required = ["token_url", "grant_type", "username", "password", "client_id", "client_secret", "base_url"]
-    missing = [k for k in required if k not in s]
+def load_section_secrets() -> SectionSecrets:
+    if "auth" not in st.secrets:
+        raise RuntimeError('Missing [auth] in Streamlit Secrets.')
+
+    auth = st.secrets["auth"]
+
+    # allow both client_secret and the common typo client_secrete
+    client_secret = auth.get("client_secret") or auth.get("client_secrete")
+
+    required = ["token_url", "grant_type", "username", "password", "client_id", "base_url"]
+    missing = [k for k in required if not auth.get(k)]
+    if not client_secret:
+        missing.append("client_secret (or client_secrete)")
+
     if missing:
-        raise RuntimeError(f"Missing required secrets keys: {missing}. Add them in Streamlit Cloud Secrets.")
-    return FlatSecrets(
-        token_url=str(s["token_url"]),
-        grant_type=str(s.get("grant_type", "password")),
-        username=str(s["username"]),
-        password=str(s["password"]),
-        client_id=str(s["client_id"]),
-        client_secret=str(s["client_secret"]),
-        scope=str(s.get("scope", "")),
-        base_url=str(s["base_url"]),
+        raise RuntimeError(f"Missing required auth keys: {missing}")
+
+    return SectionSecrets(
+        token_url=str(auth["token_url"]),
+        grant_type=str(auth.get("grant_type", "password")),
+        username=str(auth["username"]),
+        password=str(auth["password"]),
+        client_id=str(auth["client_id"]),
+        client_secret=str(client_secret),
+        scope=str(auth.get("scope", "")),
+        base_url=str(auth["base_url"]),
     )
 
 
-def generate_access_token_from_flat_secrets() -> str:
-    fs = load_flat_secrets()
+def generate_access_token_from_secrets() -> str:
+    cfg = load_section_secrets()
+    st.session_state["api_base"] = cfg.base_url
     data = {
-        "grant_type": fs.grant_type or "password",
-        "username": fs.username,
-        "password": fs.password,
-        "client_id": fs.client_id,
-        "client_secret": fs.client_secret,
+        "grant_type": cfg.grant_type or "password",
+        "username": cfg.username,
+        "password": cfg.password,
+        "client_id": cfg.client_id,
+        "client_secret": cfg.client_secret,
     }
-    if fs.scope:
-        data["scope"] = fs.scope
+    if cfg.scope:
+        data["scope"] = cfg.scope
 
-    resp = requests.post(fs.token_url, data=data, timeout=30)
+    resp = requests.post(cfg.token_url, data=data, timeout=30)
     resp.raise_for_status()
     payload = resp.json()
     token = payload.get("access_token")
