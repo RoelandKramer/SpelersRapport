@@ -58,6 +58,7 @@ import requests
 import streamlit as st
 from pptx import Presentation
 
+st.write("Secrets keys:", list(st.secrets.keys()))
 
 # ----------------------------
 # Hardcoded FC Den Bosch players (for now)
