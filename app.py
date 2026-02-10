@@ -652,7 +652,7 @@ def main() -> None:
 
        except Exception as e:
            st.session_state["access_token"] = None
-         st.error(f"Token generation failed: {e}")
+           st.error(f"Token generation failed: {e}")
 
     st.divider()
 
