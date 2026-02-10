@@ -988,10 +988,10 @@ def main() -> None:
 
     if gen:
         try:
-            token = generate_access_token_from_flat_secrets()
-            fs = load_flat_secrets()
+            cfg = load_section_secrets()
+            token = generate_access_token_from_secrets()
             st.session_state["access_token"] = token
-            st.session_state["api_base"] = fs.base_url
+            st.session_state["api_base"] = cfg.base_url
             st.success("Access token generated and stored for this session.")
         except Exception as e:
             st.session_state["access_token"] = None
