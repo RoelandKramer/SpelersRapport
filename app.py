@@ -62,6 +62,16 @@ from pptx import Presentation
 # ----------------------------
 # Hardcoded FC Den Bosch players (for now)
 # ----------------------------
+FC_DEN_BOSCH_PLAYERS = [
+    {"name": "Kevin Monzialo", "player_id": 40665},
+    {"name": "Kevin Felida", "player_id": 35836},
+    {"name": "Meees Laros", "player_id": 707170},
+    {"name": "Hicham Acheffay", "player_id": 35990},
+    {"name": "Ilias Boumassaoudi", "player_id": 678422},
+    {"name": "Thijs van Leeuwen", "player_id": 52187},
+    {"name": "Pepijn van de Merbel", "player_id": 52270},
+]
+
 players_source = FC_DEN_BOSCH_PLAYERS  # fallback
 
 if st.session_state.get("access_token") and st.session_state.get("api_base"):
