@@ -880,7 +880,7 @@ def fill_template_full(
 
     for slide in prs.slides:
         if player_img_bytes:
-            inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
+          inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
 
         inserted["radar"] += insert_image_at_token_exact(slide, "{{RADAR_CHART}}", radar_png)
 
