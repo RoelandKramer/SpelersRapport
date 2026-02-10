@@ -89,7 +89,7 @@ FC_DEN_BOSCH_PLAYERS = [
 # ----------------------------
 TEMPLATE_PPTX_PATH = "powerpoint_template.pptx"
 BENCH_CSV_PATH = "df_bench.csv"
-PLAYER_PHOTOS_DIR = "speler_foto's"
+PLAYER_PHOTOS_DIR = "Speler_foto's"
 
 TOKEN_HINT = "Generate access token first (required)."
 
