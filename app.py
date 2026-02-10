@@ -752,7 +752,7 @@ def generate_radar_chart_for_player(
 
     plt.tight_layout()
     # Save with transparent=True to ensure the fig.patch remains clear
-    fig.savefig(out_png, bbox_inches="tight", transparent=fALSE)
+    fig.savefig(out_png, bbox_inches="tight", transparent=False)
     plt.close(fig)
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
