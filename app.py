@@ -1038,17 +1038,17 @@ def main() -> None:
     st.session_state.setdefault("pdf_bytes", None)
     st.session_state.setdefault("last_filename_base", None)
 
-    # Health checks
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        st.caption("Template")
-        st.write("✅" if os.path.exists(TEMPLATE_PPTX_PATH) else f"❌ Missing: {TEMPLATE_PPTX_PATH}")
-    with col_b:
-        st.caption("bench.csv")
-        st.write("✅" if os.path.exists(BENCH_CSV_PATH) else f"❌ Missing: {BENCH_CSV_PATH}")
-    with col_c:
-        st.caption("PDF export")
-        st.write("✅ LibreOffice found" if can_convert_to_pdf() else "⚠️ LibreOffice not found (PPTX only)")
+    # # Health checks
+    # col_a, col_b, col_c = st.columns(3)
+    # with col_a:
+    #     st.caption("Template")
+    #     st.write("✅" if os.path.exists(TEMPLATE_PPTX_PATH) else f"❌ Missing: {TEMPLATE_PPTX_PATH}")
+    # with col_b:
+    #     st.caption("bench.csv")
+    #     st.write("✅" if os.path.exists(BENCH_CSV_PATH) else f"❌ Missing: {BENCH_CSV_PATH}")
+    # with col_c:
+    #     st.caption("PDF export")
+    #     st.write("✅ LibreOffice found" if can_convert_to_pdf() else "⚠️ LibreOffice not found (PPTX only)")
 
     # Load bench.csv
     try:
