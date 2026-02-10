@@ -643,7 +643,7 @@ def main() -> None:
         else:
             st.warning(TOKEN_HINT)
 
-   if gen:
+    if gen:
        try:
            token = generate_access_token_from_secrets()
            st.session_state["access_token"] = token
