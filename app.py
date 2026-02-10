@@ -915,11 +915,14 @@ def fill_template_full(
 
     # Performance chart: upload wins; else auto-generate like notebook
     perf_png: Optional[str] = None
+    perf_used = "missing"
+    
     if performance_upload_bytes:
         perf_png = os.path.join(os.path.dirname(out_pptx_path), "performance_chart.png")
         with open(perf_png, "wb") as f:
             f.write(performance_upload_bytes)
-    
+        perf_used = "uploaded"
+
     
         inserted = {
             "player_image": 0,
