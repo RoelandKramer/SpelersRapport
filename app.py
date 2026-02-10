@@ -82,7 +82,7 @@ DEFAULT_NAME_R = 1.33
 # App configuration
 # ----------------------------
 TEMPLATE_PPTX_PATH = "powerpoint_template.pptx"
-BENCH_CSV_PATH = "bench.csv"
+BENCH_CSV_PATH = "df_bench.csv"
 PLAYER_PHOTOS_DIR = "speler_foto's"
 
 TOKEN_HINT = "Generate access token first (required)."
