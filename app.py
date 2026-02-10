@@ -603,21 +603,21 @@ def main() -> None:
         st.error("No players found in bench.csv 'player' column.")
         st.stop()
 
-    # Sidebar: configuration + health checks
-    with st.sidebar:
-        st.header("Setup")
-        st.markdown(
-            f"""
-**1) {TOKEN_HINT}**
+#     # Sidebar: configuration + health checks
+#     with st.sidebar:
+#         st.header("Setup")
+#         st.markdown(
+#             f"""
+# **1) {TOKEN_HINT}**
 
-This app reads API credentials from **`.streamlit/secrets.toml`**.
-You do **not** enter secrets in the UI.
-"""
-        )
-        st.markdown("**Template:** " + ("✅" if os.path.exists(TEMPLATE_PPTX_PATH) else "❌ missing"))
-        st.markdown("**bench.csv:** " + ("✅" if os.path.exists(BENCH_CSV_PATH) else "❌ missing"))
-        st.markdown("**speler_foto's:** " + ("✅" if os.path.isdir(PLAYER_PHOTOS_DIR) else "⚠️ not found (photo optional)"))
-        st.markdown("**PDF export:** " + ("✅ LibreOffice found" if can_convert_to_pdf() else "⚠️ LibreOffice not found (PPTX only)"))
+# This app reads API credentials from **`.streamlit/secrets.toml`**.
+# You do **not** enter secrets in the UI.
+# """
+#         )
+#         st.markdown("**Template:** " + ("✅" if os.path.exists(TEMPLATE_PPTX_PATH) else "❌ missing"))
+#         st.markdown("**bench.csv:** " + ("✅" if os.path.exists(BENCH_CSV_PATH) else "❌ missing"))
+#         st.markdown("**speler_foto's:** " + ("✅" if os.path.isdir(PLAYER_PHOTOS_DIR) else "⚠️ not found (photo optional)"))
+#         st.markdown("**PDF export:** " + ("✅ LibreOffice found" if can_convert_to_pdf() else "⚠️ LibreOffice not found (PPTX only)"))
 
     # Session state
     st.session_state.setdefault("access_token", None)
