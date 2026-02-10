@@ -1170,13 +1170,13 @@ def main() -> None:
 
     with right:
         perf_file = st.file_uploader(
-            "Optional performance chart (PNG/JPG). If not provided, it will be auto-generated.",
+            "Optional performance chart (PNG/JPG). If not provided, it will be skipped.",
             type=["png", "jpg", "jpeg"],
             accept_multiple_files=False,
         )
         perf_bytes = perf_file.read() if perf_file else None
         if perf_file:
-            st.image(perf_bytes, caption="Uploaded performance chart", use_container_width=True)
+            st.success("Performance chart uploaded.")
 
     generate = st.button("Generate PPTX and PDF", type="primary")
 
