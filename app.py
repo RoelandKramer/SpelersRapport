@@ -87,7 +87,7 @@ FC_DEN_BOSCH_PLAYERS = [
 # ----------------------------
 # App configuration
 # ----------------------------
-TEMPLATE_PPTX_PATH = "powerpoint_template.pptx"
+TEMPLATE_PPTX_PATH = "powerpoint template.pptx"
 BENCH_CSV_PATH = "df_bench.csv"
 PLAYER_PHOTOS_DIR = "Speler_foto's"
 
