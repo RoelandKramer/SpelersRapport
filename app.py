@@ -325,6 +325,27 @@ def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
 
     return changed
 
+def build_season_team_best_from_items(items: List[dict]) -> Dict[str, Dict[str, Any]]:
+    """
+    Returns {season_label: {"team": team_name, "mins": minutes}} picking the row with max minutes.
+    Accepts items that have (season.name, team.name, stats.minutesPlayed or metrics.minutesPlayed).
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for it in items or []:
+        sname = ((it.get("season") or {}).get("name") or "").strip()
+        tname = ((it.get("team") or {}).get("name") or "").strip()
+        if not sname or not tname:
+            continue
+
+        # minutes might live under stats OR metrics depending on endpoint
+        mins = safe_num(((it.get("stats") or {}).get("minutesPlayed")))
+        mins = max(mins, safe_num(((it.get("metrics") or {}).get("minutesPlayed"))))
+
+        prev = out.get(sname)
+        if prev is None or mins > safe_num(prev.get("mins")):
+            out[sname] = {"team": tname, "mins": mins}
+    return out
+
 
 def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str, str]:
     player = api_get_json(api_base, token, f"/api/v2/players/{player_id}")
@@ -332,8 +353,39 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     team = player.get("team") or {}
     contract = player.get("contract") or {}
 
+    # seasons
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
-    season_ids = pick_latest_season_ids(seasons_obj, n=3)
+    season_ids = pick_latest_season_ids(seasons_obj, n=5)  # bump to 5 to cover older seasons too
+    
+    # --- NEW: fallback mapping from career-stats (covers seasons without x-metrics) ---
+    cs_obj = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/career-stats/players",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
+    )
+    season_team_best = build_season_team_best_from_items(items_of(cs_obj))
+    
+    # --- Optional: also merge contribution-ratings as additional fallback ---
+    cr_obj = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/players/contribution-ratings",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
+    )
+    for s, v in build_season_team_best_from_items(items_of(cr_obj)).items():
+        season_team_best.setdefault(s, v)
+    
+    # --- Existing: x-metrics (use it to override when available / more precise) ---
+    xmetrics_obj = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/players/x-metrics",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "P90": True, "Limit": 500},
+    )
+    for s, v in build_season_team_best_from_items(items_of(xmetrics_obj)).items():
+        season_team_best[s] = v  # override
+
 
     sciskill_obj = api_get_json(
         api_base,
@@ -374,7 +426,9 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         prev = season_team_best.get(sname)
         if prev is None or mins > (prev.get("mins") or 0):
             season_team_best[sname] = {"team": tname, "mins": mins}
-    st.write("season_team_best keys:", sorted(season_team_best.keys())[:20])
+          
+    st.write("season_team_best keys:", sorted(season_team_best.keys()))
+    st.write("2023/2024 club:", (season_team_best.get("2023/2024") or {}).get("team"))
 
     nats = info.get("nationalities") or []
     nat_name = (nats[0].get("name") if nats else None) or (info.get("birthCountry") or {}).get("name") or ""
