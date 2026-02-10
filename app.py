@@ -849,7 +849,16 @@ def fill_template_full(
     performance_upload_bytes: Optional[bytes],
 ) -> Dict[str, Any]:
     if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Missing {template_path}. Put powerpoint_template.pptx in repo root.")
+        raise FileNotFoundError(...)
+
+    if not (api_base and token and player_id):
+        raise RuntimeError("Missing api_base/token/player_id - cannot build full report values.")
+
+    # ✅ Always define values here, unconditionally
+    values: Dict[str, Any] = build_personal_values(api_base, token, int(player_id))
+
+    # ✅ Ensure _POSITIONS_ORDERED exists AFTER values exists
+    values.setdefault("_POSITIONS_ORDERED", [])
 
     prs = Presentation(template_path)
 
