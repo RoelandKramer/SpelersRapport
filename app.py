@@ -345,14 +345,24 @@ def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
     if not getattr(shape, "has_text_frame", False):
         return False
 
+    tf = shape.text_frame
     changed = False
-    for p in shape.text_frame.paragraphs:
-        for run in p.runs:
-            new_text = replace_tokens_in_text(run.text, values)
-            if new_text != run.text:
-                run.text = new_text
-                changed = True
+
+    for p in tf.paragraphs:
+        full = "".join(run.text for run in p.runs)
+        new = replace_tokens_in_text(full, values)
+        if new != full:
+            # Clear existing runs and write as one run
+            for r in list(p.runs):
+                r.text = ""
+            if p.runs:
+                p.runs[0].text = new
+            else:
+                p.add_run().text = new
+            changed = True
+
     return changed
+
 
 
 def _remove_shape(slide, shape) -> None:
@@ -379,13 +389,10 @@ def replace_textbox_exact_with_image(slide, token: str, image_bytes: bytes) -> b
 
 
 def insert_image_at_token(slide, token: str, image_path: str) -> bool:
-    """
-    Finds token anywhere in a text shape; removes the shape and inserts picture there.
-    """
     for shape in list(_iter_shapes(slide)):
         if not getattr(shape, "has_text_frame", False):
             continue
-        if token not in (shape.text or ""):
+        if (shape.text or "").strip() != token:
             continue
 
         left, top, width, height = shape.left, shape.top, shape.width, shape.height
@@ -418,7 +425,7 @@ def fill_template(
 
     prs = Presentation(template_path)
 
-    values: Dict[str, str] = {"PLAYER_NAME": player_name}
+    values = build_personal_values(api_base, token, player_id)
 
     # Best-effort: fetch API info if player_id + token provided
     if player_id and token and api_base:
@@ -471,7 +478,7 @@ def fill_template(
             inserted["radar"] += 1
 
         if perf_png:
-            if insert_image_at_token(slide, "{{PERFORMANCE_PLOT}}", perf_png):
+            if insert_image_at_token(slide, "{{PERFORMANCE_CHART}}", perf_png):
                 inserted["performance"] += 1
             if replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_image_bytes):
                 inserted["performance"] += 1
@@ -636,11 +643,13 @@ def main() -> None:
         else:
             st.warning(TOKEN_HINT)
 
-    if gen:
-        try:
-            token = generate_access_token_from_secrets()
-            st.session_state["access_token"] = token
-            st.success("Access token generated and stored for this session.")
+   if gen:
+       try:
+           token = generate_access_token_from_secrets()
+           st.session_state["access_token"] = token
+           st.session_state["api_base"] = st.secrets.get("base_url", "")
+           st.success("Access token generated and stored for this session.")
+
         except Exception as e:
             st.session_state["access_token"] = None
             st.error(f"Token generation failed: {e}")
