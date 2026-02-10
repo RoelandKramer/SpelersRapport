@@ -366,6 +366,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     abb_nat = f"{flag}⎟{nat_alpha3}" if flag and nat_alpha3 else (nat_alpha3 or "")
 
     pos_list = info.get("positions") or []
+    values["_POSITIONS_ORDERED"] = pos_list  # <-- add this
     main_position = prettify_camel(pos_list[0]) if len(pos_list) >= 1 else ""
     sec_position = prettify_camel(pos_list[1]) if len(pos_list) >= 2 else ""
 
@@ -787,6 +788,51 @@ def insert_image_at_token_exact(slide, token: str, image_path: str) -> int:
         slide.shapes.add_picture(image_path, left, top, width=width, height=height)
         replaced += 1
     return replaced
+from pptx.dml.color import RGBColor
+
+# Template-specific: adapt if your template uses different position labels.
+POSITION_TO_NUMBER: Dict[str, int] = {
+    "Goalkeeper": 1,
+    "RightBack": 2,
+    "CenterBack": 3,
+    "LeftBack": 4,
+    "DefensiveMidfielder": 6,
+    "CentralMidfielder": 8,
+    "AttackingMidfielder": 10,
+    "RightWinger": 7,
+    "LeftWinger": 11,
+    "Striker": 9,
+}
+
+MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
+SECOND_BLUE = RGBColor(0, 142, 204)   # adjust to your exact template light-blue if needed
+
+
+def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
+    if not ordered_positions:
+        return
+
+    main_num = POSITION_TO_NUMBER.get(ordered_positions[0])
+    secondary_nums = [
+        POSITION_TO_NUMBER.get(p)
+        for p in ordered_positions[1:3]
+        if p in POSITION_TO_NUMBER
+    ]
+
+    for shape in slide.shapes:
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        txt = (shape.text_frame.text or "").strip()
+        if not txt.isdigit():
+            continue
+
+        num = int(txt)
+        if main_num is not None and num == main_num:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = MAIN_BLUE
+        elif num in secondary_nums:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = SECOND_BLUE
 
 
 # ----------------------------
@@ -856,36 +902,32 @@ def fill_template_full(
     )
 
     # Performance chart: upload wins; else auto-generate like notebook
-    perf_png = os.path.join(os.path.dirname(out_pptx_path), "performance_chart.png")
-    perf_used = "uploaded" if performance_upload_bytes else "auto"
+    perf_png: Optional[str] = None
     if performance_upload_bytes:
+        perf_png = os.path.join(os.path.dirname(out_pptx_path), "performance_chart.png")
         with open(perf_png, "wb") as f:
             f.write(performance_upload_bytes)
-    else:
-        generate_performance_plot_simple(
-            out_png=perf_png,
-            title="Performance",
-            subtitle="Performance (proxy)",
-            player_name=values.get("PLAYER_NAME") or player_name_ui,
-            strengths_line=strengths_line,
-            percentile=float(percentile),
-        )
-
-    inserted = {
-        "player_image": 0,
-        "radar": 0,
-        "performance": 0,
-        "text_shapes_changed": 0,
-    }
+    
+    
+        inserted = {
+            "player_image": 0,
+            "radar": 0,
+            "performance": 0,
+            "text_shapes_changed": 0,
+        }
 
     for slide in prs.slides:
+        apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
+
         if player_img_bytes:
           inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
 
         inserted["radar"] += insert_image_at_token_exact(slide, "{{RADAR_CHART}}", radar_png)
 
         # Template uses {{PERFORMANCE_CHART}} (as you observed)
-        inserted["performance"] += insert_image_at_token_exact(slide, "{{PERFORMANCE_CHART}}", perf_png)
+        if perf_png:
+            inserted["performance"] += insert_image_at_token_exact(slide, "{{PERFORMANCE_CHART}}", perf_png)
+            inserted["performance"] += replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_upload_bytes)
 
         # Optional second placeholder
         if performance_upload_bytes:
