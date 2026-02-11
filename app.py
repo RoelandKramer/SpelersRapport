@@ -40,7 +40,9 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
-
+from pptx.oxml.ns import qn
+from PIL import Image
+import io
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -230,6 +232,43 @@ TOKEN_RE_SINGLE = re.compile(r"\{([A-Z0-9_\/]+)\}")
 
 _LEADING_SPACES_RE = re.compile(r"^( +)")
 
+def _read_src_rect(pic_shape) -> tuple[int, int, int, int] | None:
+    """
+    Reads <a:srcRect l="" t="" r="" b=""> crop in 1/1000 percent units (0..100000).
+    Returns (l,t,r,b) as ints or None.
+    """
+    src = pic_shape._element.xpath(".//a:srcRect")
+    if not src:
+        return None
+    el = src[0]
+    def g(k): 
+        v = el.get(k)
+        return int(v) if v is not None else 0
+    return (g("l"), g("t"), g("r"), g("b"))
+
+def _apply_pptx_crop(img: Image.Image, src_rect: tuple[int,int,int,int] | None) -> Image.Image:
+    """
+    Applies PPTX srcRect crop to the PIL image.
+    l/t/r/b are in 0..100000 (thousandths of percent).
+    """
+    if not src_rect:
+        return img
+
+    l, t, r, b = src_rect
+    w, h = img.size
+
+    # fractions
+    left = int(round((l / 100000.0) * w))
+    top = int(round((t / 100000.0) * h))
+    right = int(round(w - (r / 100000.0) * w))
+    bottom = int(round(h - (b / 100000.0) * h))
+
+    left = max(0, min(left, w - 1))
+    top = max(0, min(top, h - 1))
+    right = max(left + 1, min(right, w))
+    bottom = max(top + 1, min(bottom, h))
+
+    return img.crop((left, top, right, bottom))
 
 def _spaces_to_nbsp_on_each_line(text: str) -> str:
     if not text:
@@ -913,15 +952,41 @@ def _rgbcolor_to_tuple(rgb: RGBColor) -> Tuple[int, int, int]:
     return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
 
 
+
+def _get_picture_rel(slide, pic_shape):
+    blip = pic_shape._element.xpath(".//a:blip")
+    if not blip:
+        return None
+    r_id = blip[0].get(qn("r:embed"))
+    if not r_id:
+        return None
+    return slide.part.rels.get(r_id)
+
 def _find_pitch_picture(slide):
+    """
+    Pick the pitch: prefer TIFF / 'pasted-image' picture part (your template pitch is a TIFF).
+    """
     pics = [sh for sh in slide.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
     if not pics:
         return None
-    pics_sorted = sorted(pics, key=lambda s: (s.left, -s.top), reverse=True)
-    for p in pics_sorted:
-        if p.width > 900000 and p.height > 700000:
-            return p
-    return pics_sorted[0]
+
+    scored = []
+    for p in pics:
+        rel = _get_picture_rel(slide, p)
+        partname = ""
+        if rel and hasattr(rel.target_part, "partname"):
+            partname = str(rel.target_part.partname)
+        score = 0
+        if partname.lower().endswith(".tiff") or partname.lower().endswith(".tif"):
+            score += 100
+        if "pasted" in partname.lower():
+            score += 50
+        # pitch is right side generally
+        score += int(p.left / 100000)  
+        scored.append((score, p))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][1]
 
 
 def _find_number_shapes(slide) -> Dict[int, Any]:
@@ -936,20 +1001,13 @@ def _find_number_shapes(slide) -> Dict[int, Any]:
                 out[n] = sh
     return out
 
-
-def _render_formation_png(
-    pitch_bytes: bytes,
-    pitch_box_emu: Tuple[int, int, int, int],
-    num_shapes: Dict[int, Any],
-    ordered_positions: List[str],
-    out_png_path: str,
-) -> None:
+def _render_formation_png(pitch_bytes, pitch_box_emu, src_rect, num_shapes, ordered_positions, out_png_path):
     left, top, width, height = pitch_box_emu
-
-    base = Image.open(io.BytesIO(pitch_bytes)).convert("RGBA")
+    img = Image.open(io.BytesIO(pitch_bytes)).convert("RGBA")
+    img = _apply_pptx_crop(img, src_rect)
     px_w = max(1, int(width / 9525))
     px_h = max(1, int(height / 9525))
-    base = base.resize((px_w, px_h), Image.Resampling.LANCZOS)
+    base = img.resize((px_w, px_h), Image.Resampling.LANCZOS)
 
     emu_per_px_x = width / base.size[0]
     emu_per_px_y = height / base.size[1]
@@ -1023,9 +1081,12 @@ def flatten_formation_block_for_pdf(slide, ordered_positions: List[str], tmp_dir
         return False
 
     out_png = os.path.join(tmp_dir, "formation_flat.png")
+    src_rect = _read_src_rect(pitch_pic)
+    
     _render_formation_png(
         pitch_bytes=pitch_bytes,
         pitch_box_emu=(pitch_pic.left, pitch_pic.top, pitch_pic.width, pitch_pic.height),
+        src_rect=src_rect,
         num_shapes=nums,
         ordered_positions=ordered_positions or [],
         out_png_path=out_png,
