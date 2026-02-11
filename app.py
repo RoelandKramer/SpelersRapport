@@ -1007,11 +1007,16 @@ def flatten_formation_block_for_pdf(slide, ordered_positions: List[str], tmp_dir
     blip = pitch_pic._element.xpath(".//a:blip")
     if not blip:
         return False
+
     r_id = blip[0].get(qn("r:embed"))
-    img_part = slide.part.related_parts.get(r_id)
-    if img_part is None:
+    if not r_id:
         return False
-    pitch_bytes = img_part.blob
+
+    rel = slide.part.rels.get(r_id)
+    if rel is None:
+        return False
+
+    pitch_bytes = rel.target_part.blob
 
     nums = _find_number_shapes(slide)
     if not nums:
@@ -1038,7 +1043,6 @@ def flatten_formation_block_for_pdf(slide, ordered_positions: List[str], tmp_dir
         height=pitch_pic.height,
     )
     return True
-
 
 # ----------------------------
 # Template filling (full flow)
