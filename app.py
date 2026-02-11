@@ -102,6 +102,79 @@ def normalize_season_label(name: str) -> str:
         return ""
     return f"{m.group(1)}/{m.group(2)}"
 
+_LEADING_SPACES_RE = re.compile(r"^( +)")
+
+def _spaces_to_nbsp_on_each_line(text: str) -> str:
+    """
+    LibreOffice tends to collapse leading spaces in PDF export.
+    Converting *leading* spaces to NBSP preserves visual indentation.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    out: List[str] = []
+    for line in lines:
+        m = _LEADING_SPACES_RE.match(line)
+        if not m:
+            out.append(line)
+            continue
+        n = len(m.group(1))
+        out.append(("\u00A0" * n) + line[n:])
+    return "\n".join(out)
+
+
+def _harden_textbox_for_lo(shape) -> None:
+    """
+    Make text rendering more deterministic across PowerPoint vs LibreOffice.
+    """
+    if not getattr(shape, "has_text_frame", False):
+        return
+
+    tf = shape.text_frame
+    tf.word_wrap = True
+    tf.auto_size = MSO_AUTO_SIZE.NONE
+
+    # Explicit margins (tune if needed)
+    # These defaults prevent LO from "re-centering" or shifting left too much.
+    tf.margin_left = shape.text_frame.margin_left or 0
+    tf.margin_right = shape.text_frame.margin_right or 0
+    tf.margin_top = shape.text_frame.margin_top or 0
+    tf.margin_bottom = shape.text_frame.margin_bottom or 0
+
+
+def _shrink_font_for_long_name(shape, player_name: str) -> None:
+    """
+    Very simple heuristic: reduce font size when name is long.
+    Helps LO export avoid left-shift/overflow differences.
+    """
+    if not getattr(shape, "has_text_frame", False):
+        return
+
+    if not player_name:
+        return
+
+    # Tune thresholds to your template font
+    n = len(player_name.strip())
+    if n <= 18:
+        return
+
+    target_pt = 34
+    if n > 22:
+        target_pt = 30
+    if n > 26:
+        target_pt = 26
+    if n > 30:
+        target_pt = 24
+
+    for p in shape.text_frame.paragraphs:
+        for r in p.runs:
+            if r.font.size is None:
+                r.font.size = Pt(target_pt)
+            else:
+                r.font.size = Pt(min(target_pt, int(r.font.size.pt)))
+
+
 # ----------------------------
 # App configuration (match your repo file names exactly)
 # ----------------------------
@@ -110,6 +183,7 @@ BENCH_CSV_PATH = "df_bench.csv"
 PLAYER_PHOTOS_DIR = "Speler_fotos"
 
 TOKEN_HINT = "Generate access token first (required)."
+
 
 
 # ----------------------------
@@ -313,31 +387,43 @@ def replace_textbox_exact_with_image(slide, exact_text: str, image_bytes: bytes)
 
 
 def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
+    """
+    Replaces {{TOKEN}} and {TOKEN} inside runs.
+    Additionally hardens text to export better via LibreOffice:
+    - Converts leading spaces to NBSP on each line (preserves indentation)
+    - Disables autofit (more deterministic)
+    """
     if not getattr(shape, "has_text_frame", False):
         return False
 
     changed = False
+    _harden_textbox_for_lo(shape)
 
     for paragraph in shape.text_frame.paragraphs:
-        # 1) Try run-level replacements (preserves formatting best)
+        # 1) Run-level replacement
         for run in paragraph.runs:
             t = run.text or ""
             if not t:
                 continue
+
             new_t = TOKEN_RE_DOUBLE.sub(lambda m: values.get(m.group(1), m.group(0)), t)
             new_t = TOKEN_RE_SINGLE.sub(lambda m: values.get(m.group(1), m.group(0)), new_t)
+
+            # PDF fidelity: preserve leading indentation
+            new_t = _spaces_to_nbsp_on_each_line(new_t)
+
             if new_t != t:
                 run.text = new_t
                 changed = True
 
-        # 2) If token spans runs, rebuild text WITHOUT clearing paragraph formatting
+        # 2) Token spanning runs: rebuild, but still preserve indentation
         combined = "".join((r.text or "") for r in paragraph.runs)
         if ("{{" in combined or "}" in combined) and paragraph.runs:
             new_combined = TOKEN_RE_DOUBLE.sub(lambda m: values.get(m.group(1), m.group(0)), combined)
             new_combined = TOKEN_RE_SINGLE.sub(lambda m: values.get(m.group(1), m.group(0)), new_combined)
+            new_combined = _spaces_to_nbsp_on_each_line(new_combined)
 
             if new_combined != combined:
-                # Keep paragraph properties; reuse first run, blank the rest
                 paragraph.runs[0].text = new_combined
                 for r in paragraph.runs[1:]:
                     r.text = ""
@@ -969,27 +1055,20 @@ def fill_template_full(
     inserted = {"player_image": 0, "radar": 0, "performance": 0, "text_shapes_changed": 0}
 
     if not os.path.exists(template_path):
-        raise FileNotFoundError(...)
+        raise FileNotFoundError(f"Missing template: {template_path}")
 
     if not (api_base and token and player_id):
         raise RuntimeError("Missing api_base/token/player_id - cannot build full report values.")
 
-    # ✅ Always define values here, unconditionally
     values: Dict[str, Any] = build_personal_values(api_base, token, int(player_id))
-
-    # ✅ Ensure _POSITIONS_ORDERED exists AFTER values exists
     values.setdefault("_POSITIONS_ORDERED", [])
 
     prs = Presentation(template_path)
 
-    # Build values (old logic)
-
-    # Seasons + latest
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
     season_ids_latest3 = pick_latest_season_ids(seasons_obj, n=3)
     latest_season_id = season_ids_latest3[0] if season_ids_latest3 else 0
 
-    # Stats + strengths
     stats = get_games_minutes_goals_assists(
         api_base=api_base,
         token=token,
@@ -1032,40 +1111,40 @@ def fill_template_full(
         team_name=values.get("CLUB_2024/2025") or values.get("CLUB_2023/2024") or None,
     )
 
-    # Performance chart: upload wins; else auto-generate like notebook
+    # Performance chart: upload wins; else skip
     perf_png: Optional[str] = None
     perf_used = "missing"
-    
     if performance_upload_bytes:
         perf_png = os.path.join(os.path.dirname(out_pptx_path), "performance_chart.png")
         with open(perf_png, "wb") as f:
             f.write(performance_upload_bytes)
         perf_used = "uploaded"
 
-    
-        inserted = {
-            "player_image": 0,
-            "radar": 0,
-            "performance": 0,
-            "text_shapes_changed": 0,
-        }
-
+    # Apply EVERYTHING per-slide (fixes your current bug)
     for slide in prs.slides:
+        # images
         if player_img_bytes:
             inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
-    
+
         inserted["radar"] += insert_image_at_token_exact(slide, "{{RADAR_CHART}}", radar_png)
-    
+
         if perf_png:
             inserted["performance"] += insert_image_at_token_exact(slide, "{{PERFORMANCE_CHART}}", perf_png)
             inserted["performance"] += replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_upload_bytes)
-    
-    for shape in slide.shapes:
-        if replace_tokens_in_shape(shape, values):
-            inserted["text_shapes_changed"] += 1
-    
-    apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
-    
+
+        # text tokens + LO hardening
+        for shape in slide.shapes:
+            if replace_tokens_in_shape(shape, values):
+                inserted["text_shapes_changed"] += 1
+
+            # Special-case: name handling (reduce PDF drift for long names)
+            # Works because your template uses {PLAYER_NAME} :contentReference[oaicite:2]{index=2}
+            if getattr(shape, "has_text_frame", False):
+                if (shape.text_frame.text or "").strip() == (values.get("PLAYER_NAME") or ""):
+                    _shrink_font_for_long_name(shape, values.get("PLAYER_NAME") or "")
+
+        # positions coloring
+        apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
 
     prs.save(out_pptx_path)
 
@@ -1079,6 +1158,7 @@ def fill_template_full(
     }
 
 
+
 # ----------------------------
 # PDF conversion (best-effort)
 # ----------------------------
@@ -1087,9 +1167,13 @@ def can_convert_to_pdf() -> bool:
 
 
 def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
+    """
+    LibreOffice fidelity is imperfect, but this improves consistency a bit.
+    """
     if not can_convert_to_pdf():
         raise RuntimeError("LibreOffice (soffice) not found on PATH.")
 
+    # Use explicit Impress export filter (helps in some environments)
     cmd = [
         "soffice",
         "--headless",
@@ -1098,12 +1182,12 @@ def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
         "--nodefault",
         "--nofirststartwizard",
         "--convert-to",
-        "pdf",
+        "pdf:impress_pdf_Export",
         "--outdir",
         out_dir,
         pptx_path,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if proc.returncode != 0:
         raise RuntimeError(f"PDF conversion failed.\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
 
@@ -1112,7 +1196,6 @@ def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
     if not os.path.exists(pdf_path):
         raise RuntimeError("Conversion succeeded but PDF not found.")
     return pdf_path
-
 
 # ----------------------------
 # Streamlit UI
