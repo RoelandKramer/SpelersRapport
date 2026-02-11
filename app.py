@@ -2,28 +2,38 @@
 """
 Streamlit app: FC Den Bosch player PPTX/PDF generator
 
-Key fixes:
-- Correct per-slide processing (token replacement + coloring was previously only applied to last slide).
-- PDF fidelity mode: keeps PPTX editable, but flattens the formation block to a PNG *only* for PDF export
-  to avoid LibreOffice rendering differences (z-order/transparency/grouped shapes).
-- LibreOffice hardening: preserves leading indentation via NBSP conversion and disables autofit.
-
-Requirements:
-- python-pptx
-- Pillow
-- matplotlib, numpy, pandas, requests, streamlit
-- LibreOffice (soffice) for PDF export
-
 Repo structure (case-sensitive on Streamlit Cloud / Linux):
 .
 ├─ app.py
-├─ powerpoint template.pptx
-├─ df_bench.csv
-├─ Speler_fotos/
+├─ powerpoint_template.pptx
+├─ bench.csv
+├─ speler_foto's/
 │   ├─ Kevin Monzialo.png
 │   ├─ Kevin Felida.png
 │   └─ ...
 └─ requirements.txt
+
+Streamlit Cloud secrets (FLAT keys; matches your current setup):
+token_url = "..."
+grant_type = "password"
+username = "..."
+password = "..."
+client_id = "..."
+client_secret = "..."
+scope = ""
+base_url = "https://..."   # API base used by api_get_json
+
+Template placeholders supported:
+- Text tokens: {{PLAYER_NAME}}, {{NATIONALITY}}, {{BIRTH_DATE}}, {{HEIGHT_M}}, {{CONTRACT}}, {{IS_EU}}, ...
+- Image placeholders:
+  - {IMAGE}                -> local player photo (speler_foto's/<name>.png), fallback to API imageUrl
+  - {{RADAR_CHART}}        -> radar chart from bench.csv
+  - {{PERFORMANCE_CHART}}  -> performance chart (uploaded OR auto-generated)
+  - {PRESTATIES_FIGURE}    -> same as performance chart bytes (optional)
+
+Notes:
+- Token replacement handles "split across runs" (PowerPoint quirks).
+- PDF export needs LibreOffice ("soffice") installed on the system PATH.
 """
 
 from __future__ import annotations
@@ -40,24 +50,17 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
-from pptx.oxml.ns import qn
-from PIL import Image
-import io
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
-from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.enum.text import MSO_AUTO_SIZE
-from pptx.oxml.ns import qn
-from pptx.util import Pt
+
 
 # ----------------------------
-# Hardcoded FC Den Bosch players
+# Hardcoded FC Den Bosch players (for now)
 # ----------------------------
 FC_DEN_BOSCH_PLAYERS = [
     {"name": "Kevin Monzialo", "player_id": 40665},
@@ -84,8 +87,14 @@ FC_DEN_BOSCH_PLAYERS = [
 
 SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
 
-
 def normalize_season_label(name: str) -> str:
+    """
+    Normalize season strings to 'YYYY/YYYY' when possible.
+    Examples:
+      '2023/2024 Regular Season' -> '2023/2024'
+      '2023-2024' -> '2023/2024'
+      '2023/24' -> '' (unknown)  # add more logic if needed
+    """
     if not name:
         return ""
     m = SEASON_RE.search(str(name))
@@ -93,14 +102,15 @@ def normalize_season_label(name: str) -> str:
         return ""
     return f"{m.group(1)}/{m.group(2)}"
 
-
 # ----------------------------
 # App configuration (match your repo file names exactly)
 # ----------------------------
 TEMPLATE_PPTX_PATH = "powerpoint template.pptx"
 BENCH_CSV_PATH = "df_bench.csv"
 PLAYER_PHOTOS_DIR = "Speler_fotos"
+
 TOKEN_HINT = "Generate access token first (required)."
+
 
 # ----------------------------
 # Radar configuration
@@ -128,40 +138,6 @@ NAME_R_MULT = {
 }
 DEFAULT_NAME_R = 1.33
 
-# ----------------------------
-# Formation position mapping / colors
-# ----------------------------
-POSITION_TO_NUMBER: Dict[str, int] = {
-    "Goalkeeper": 1,
-    "RightBack": 2,
-    "RightFullback": 2,
-    "Right Back": 2,
-    "Centre Back": 3,
-    "CentreBack": 3,
-    "LeftBack": 4,
-    "Left Back": 4,
-    "DefensiveMidfield": 6,
-    "Defensive Midfield": 6,
-    "CentreMidfield": 8,
-    "Centre Midfield": 8,
-    "AttackingMidfield": 10,
-    "Attacking Midfield": 10,
-    "RightWing": 7,
-    "Right Wing": 7,
-    "Left Wing": 11,
-    "LeftWing": 11,
-    "Striker": 9,
-    "CentreForward": 9,
-    "Centre Forward": 9,
-}
-
-MAIN_BLUE = RGBColor(0, 83, 159)
-SECOND_BLUE = RGBColor(0, 142, 204)
-
-# ----------------------------
-# Secrets
-# ----------------------------
-
 
 @dataclass(frozen=True)
 class SectionSecrets:
@@ -180,6 +156,8 @@ def load_section_secrets() -> SectionSecrets:
         raise RuntimeError('Missing [auth] in Streamlit Secrets.')
 
     auth = st.secrets["auth"]
+
+    # allow both client_secret and the common typo client_secrete
     client_secret = auth.get("client_secret") or auth.get("client_secrete")
 
     required = ["token_url", "grant_type", "username", "password", "client_id", "base_url"]
@@ -225,72 +203,10 @@ def generate_access_token_from_secrets() -> str:
 
 
 # ----------------------------
-# Token replacement + PDF hardening
+# Notebook-port helpers (your functions + required glue)
 # ----------------------------
 TOKEN_RE_DOUBLE = re.compile(r"\{\{([A-Z0-9_\/]+)\}\}")
 TOKEN_RE_SINGLE = re.compile(r"\{([A-Z0-9_\/]+)\}")
-
-_LEADING_SPACES_RE = re.compile(r"^( +)")
-
-def _read_src_rect(pic_shape) -> tuple[int, int, int, int] | None:
-    """
-    Reads <a:srcRect l="" t="" r="" b=""> crop in 1/1000 percent units (0..100000).
-    Returns (l,t,r,b) as ints or None.
-    """
-    src = pic_shape._element.xpath(".//a:srcRect")
-    if not src:
-        return None
-    el = src[0]
-    def g(k): 
-        v = el.get(k)
-        return int(v) if v is not None else 0
-    return (g("l"), g("t"), g("r"), g("b"))
-
-def _apply_pptx_crop(img: Image.Image, src_rect: tuple[int,int,int,int] | None) -> Image.Image:
-    """
-    Applies PPTX srcRect crop to the PIL image.
-    l/t/r/b are in 0..100000 (thousandths of percent).
-    """
-    if not src_rect:
-        return img
-
-    l, t, r, b = src_rect
-    w, h = img.size
-
-    # fractions
-    left = int(round((l / 100000.0) * w))
-    top = int(round((t / 100000.0) * h))
-    right = int(round(w - (r / 100000.0) * w))
-    bottom = int(round(h - (b / 100000.0) * h))
-
-    left = max(0, min(left, w - 1))
-    top = max(0, min(top, h - 1))
-    right = max(left + 1, min(right, w))
-    bottom = max(top + 1, min(bottom, h))
-
-    return img.crop((left, top, right, bottom))
-
-def _spaces_to_nbsp_on_each_line(text: str) -> str:
-    if not text:
-        return text
-    lines = text.splitlines()
-    out: List[str] = []
-    for line in lines:
-        m = _LEADING_SPACES_RE.match(line)
-        if not m:
-            out.append(line)
-            continue
-        n = len(m.group(1))
-        out.append(("\u00A0" * n) + line[n:])
-    return "\n".join(out)
-
-
-def _harden_textbox_for_lo(shape) -> None:
-    if not getattr(shape, "has_text_frame", False):
-        return
-    tf = shape.text_frame
-    tf.word_wrap = True
-    tf.auto_size = MSO_AUTO_SIZE.NONE
 
 
 def safe_num(x: Any) -> float:
@@ -308,6 +224,7 @@ def remove_shape(shape) -> None:
 
 
 def alpha3_to_flag(alpha3: str) -> str:
+    # Optional; keep empty to avoid missing mapping issues.
     return ""
 
 
@@ -395,49 +312,32 @@ def replace_textbox_exact_with_image(slide, exact_text: str, image_bytes: bytes)
     return replaced
 
 
-def insert_image_at_token_exact(slide, token: str, image_path: str) -> int:
-    replaced = 0
-    for shape in list(slide.shapes):
-        if not getattr(shape, "has_text_frame", False):
-            continue
-        if (shape.text_frame.text or "").strip() != token:
-            continue
-        left, top, width, height = shape.left, shape.top, shape.width, shape.height
-        remove_shape(shape)
-        slide.shapes.add_picture(image_path, left, top, width=width, height=height)
-        replaced += 1
-    return replaced
-
-
-def replace_tokens_in_shape(shape, values: Dict[str, str], *, pdf_mode: bool) -> bool:
+def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
     if not getattr(shape, "has_text_frame", False):
         return False
 
     changed = False
-    if pdf_mode:
-        _harden_textbox_for_lo(shape)
 
     for paragraph in shape.text_frame.paragraphs:
+        # 1) Try run-level replacements (preserves formatting best)
         for run in paragraph.runs:
             t = run.text or ""
             if not t:
                 continue
             new_t = TOKEN_RE_DOUBLE.sub(lambda m: values.get(m.group(1), m.group(0)), t)
             new_t = TOKEN_RE_SINGLE.sub(lambda m: values.get(m.group(1), m.group(0)), new_t)
-            if pdf_mode:
-                new_t = _spaces_to_nbsp_on_each_line(new_t)
             if new_t != t:
                 run.text = new_t
                 changed = True
 
+        # 2) If token spans runs, rebuild text WITHOUT clearing paragraph formatting
         combined = "".join((r.text or "") for r in paragraph.runs)
         if ("{{" in combined or "}" in combined) and paragraph.runs:
             new_combined = TOKEN_RE_DOUBLE.sub(lambda m: values.get(m.group(1), m.group(0)), combined)
             new_combined = TOKEN_RE_SINGLE.sub(lambda m: values.get(m.group(1), m.group(0)), new_combined)
-            if pdf_mode:
-                new_combined = _spaces_to_nbsp_on_each_line(new_combined)
 
             if new_combined != combined:
+                # Keep paragraph properties; reuse first run, blank the rest
                 paragraph.runs[0].text = new_combined
                 for r in paragraph.runs[1:]:
                     r.text = ""
@@ -445,39 +345,19 @@ def replace_tokens_in_shape(shape, values: Dict[str, str], *, pdf_mode: bool) ->
 
     return changed
 
-
-def _shrink_font_for_long_name(shape, player_name: str) -> None:
-    if not getattr(shape, "has_text_frame", False):
-        return
-    n = len((player_name or "").strip())
-    if n <= 18:
-        return
-
-    target_pt = 34
-    if n > 22:
-        target_pt = 30
-    if n > 26:
-        target_pt = 26
-    if n > 30:
-        target_pt = 24
-
-    for p in shape.text_frame.paragraphs:
-        for r in p.runs:
-            r.font.size = Pt(target_pt)
-
-
-# ----------------------------
-# Season/team mapping helpers
-# ----------------------------
 def build_season_team_best_from_items(items: List[dict]) -> Dict[str, Dict[str, Any]]:
+    """
+    Returns {season_label: {"team": team_name, "mins": minutes}} picking the row with max minutes.
+    Accepts items that have (season.name, team.name, stats.minutesPlayed or metrics.minutesPlayed).
+    """
     out: Dict[str, Dict[str, Any]] = {}
     for it in items or []:
-        raw_sname = ((it.get("season") or {}).get("name") or "").strip()
-        sname = normalize_season_label(raw_sname) or raw_sname
+        sname = ((it.get("season") or {}).get("name") or "").strip()
         tname = ((it.get("team") or {}).get("name") or "").strip()
         if not sname or not tname:
             continue
 
+        # minutes might live under stats OR metrics depending on endpoint
         mins = safe_num(((it.get("stats") or {}).get("minutesPlayed")))
         mins = max(mins, safe_num(((it.get("metrics") or {}).get("minutesPlayed"))))
 
@@ -487,15 +367,17 @@ def build_season_team_best_from_items(items: List[dict]) -> Dict[str, Dict[str, 
     return out
 
 
-def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str, Any]:
+def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str, str]:
     player = api_get_json(api_base, token, f"/api/v2/players/{player_id}")
     info = player.get("info") or {}
     team = player.get("team") or {}
     contract = player.get("contract") or {}
 
+    # seasons
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
-    season_ids = pick_latest_season_ids(seasons_obj, n=5)
-
+    season_ids = pick_latest_season_ids(seasons_obj, n=5)  # bump to 5 to cover older seasons too
+    
+    # --- NEW: fallback mapping from career-stats (covers seasons without x-metrics) ---
     cs_obj = api_get_json(
         api_base,
         token,
@@ -503,7 +385,8 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
     )
     season_team_best = build_season_team_best_from_items(items_of(cs_obj))
-
+    
+    # --- Optional: also merge contribution-ratings as additional fallback ---
     cr_obj = api_get_json(
         api_base,
         token,
@@ -512,15 +395,17 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     )
     for s, v in build_season_team_best_from_items(items_of(cr_obj)).items():
         season_team_best.setdefault(s, v)
-
-    xm_obj = api_get_json(
+    
+    # --- Existing: x-metrics (use it to override when available / more precise) ---
+    xmetrics_obj = api_get_json(
         api_base,
         token,
         "/api/v2/metrics/players/x-metrics",
         params={"PlayerIds": player_id, "SeasonIds": season_ids, "P90": True, "Limit": 500},
     )
-    for s, v in build_season_team_best_from_items(items_of(xm_obj)).items():
-        season_team_best[s] = v
+    for s, v in build_season_team_best_from_items(items_of(xmetrics_obj)).items():
+        season_team_best[s] = v  # override
+
 
     sciskill_obj = api_get_json(
         api_base,
@@ -542,11 +427,29 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     roles_sorted = sorted(roles, key=lambda rr: rr.get("fit") or 0, reverse=True)
     top_roles = ", ".join([rr.get("role") for rr in roles_sorted[:3] if rr.get("role")])
 
+    xmetrics_obj = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/players/x-metrics",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "P90": True, "Limit": 200},
+    )
+    x_items = items_of(xmetrics_obj)
+
+    season_team_best: Dict[str, Dict[str, Any]] = {}
+    for it in x_items:
+        raw_sname = (it.get("season") or {}).get("name") or ""
+        sname = normalize_season_label(raw_sname) or str(raw_sname).strip()
+        tname = (it.get("team") or {}).get("name") or ""
+        mins = (it.get("metrics") or {}).get("minutesPlayed") or 0
+        if not sname or not tname:
+            continue
+        prev = season_team_best.get(sname)
+        if prev is None or mins > (prev.get("mins") or 0):
+            season_team_best[sname] = {"team": tname, "mins": mins}
+        
     nats = info.get("nationalities") or []
     nat_name = (nats[0].get("name") if nats else None) or (info.get("birthCountry") or {}).get("name") or ""
-    nat_alpha3 = (nats[0].get("alpha3Code") if nats else None) or (info.get("birthCountry") or {}).get(
-        "alpha3Code"
-    ) or ""
+    nat_alpha3 = (nats[0].get("alpha3Code") if nats else None) or (info.get("birthCountry") or {}).get("alpha3Code") or ""
     flag = alpha3_to_flag(nat_alpha3)
     abb_nat = f"{flag}⎟{nat_alpha3}" if flag and nat_alpha3 else (nat_alpha3 or "")
 
@@ -565,7 +468,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     on_loan_until = fmt_date(contract.get("onLoanUntil")) if contract.get("onLoanUntil") else ""
     contract_text = contract_end or on_loan_until or ("Free agent" if contract.get("isFreeAgent") else "")
 
-    values: Dict[str, Any] = {
+    values: Dict[str, str] = {
         "PLAYER_NAME": info.get("footballName") or info.get("name") or "",
         "NATIONALITY": nat_name,
         "BIRTH_DATE": fmt_date(info.get("birthDate")),
@@ -587,16 +490,15 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         "ABB_NATIONALITY": abb_nat,
         "IMAGE": "{IMAGE}",
         "PRESTATIES_FIGURE": "{PRESTATIES_FIGURE}",
-        "_POSITIONS_ORDERED": pos_list,
-        "_PLAYER_IMAGE_URL": info.get("imageUrl") or "",
-        "_TEAM_IMAGE_URL": team.get("imageUrl") or "",
+        "_POSITIONS_ORDERED": pos_list,   # ✅ put it here
+
     }
+
+    values["_PLAYER_IMAGE_URL"] = info.get("imageUrl") or ""
+    values["_TEAM_IMAGE_URL"] = team.get("imageUrl") or ""
     return values
 
 
-# ----------------------------
-# Stats & charts
-# ----------------------------
 def get_games_minutes_goals_assists(
     api_base: str,
     token: str,
@@ -709,6 +611,38 @@ def compute_strengths_and_percentile_from_api(
     return strengths_line, float(percentile)
 
 
+def generate_performance_plot_simple(
+    out_png: str,
+    title: str,
+    subtitle: str,
+    player_name: str,
+    strengths_line: str,
+    percentile: float,
+) -> None:
+    fig = plt.figure(figsize=(8.0, 5.0), dpi=150)
+    ax = fig.add_axes([0.08, 0.22, 0.84, 0.52])
+    ax.set_xlim(0, 100)
+    ax.set_ylim(-1, 1)
+    ax.fill_between([0, 33], -0.25, 0.25, alpha=0.15)
+    ax.fill_between([33, 66], -0.25, 0.25, alpha=0.15)
+    ax.fill_between([66, 100], -0.25, 0.25, alpha=0.15)
+    ax.scatter([percentile], [0], s=250)
+    ax.set_yticks([])
+    ax.set_xticks([0, 33, 66, 100])
+    ax.set_xlabel("Percentile vs peers")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.text(0.08, 0.92, title, fontsize=18, weight="bold")
+    fig.text(0.08, 0.875, subtitle, fontsize=12)
+    fig.text(0.08, 0.80, player_name, fontsize=14, weight="bold")
+    fig.text(0.08, 0.08, strengths_line, fontsize=12)
+    fig.savefig(out_png, bbox_inches="tight")
+    plt.close(fig)
+
+
+# ----------------------------
+# Radar helpers (unchanged)
+# ----------------------------
 def _split_label_unit(label: str) -> Tuple[str, str]:
     if label.endswith("(m)"):
         return label.replace(" (m)", ""), "m"
@@ -781,10 +715,10 @@ def pick_player_row_by_name(df_bench: pd.DataFrame, player_name: str, team_name:
 
 def load_bench_csv(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Missing {path}. Put df_bench.csv in the repo root.")
+        raise FileNotFoundError(f"Missing {path}. Put bench.csv in the repo root.")
     df = pd.read_csv(path)
     if "player" not in df.columns:
-        raise ValueError("df_bench.csv must include a 'player' column.")
+        raise ValueError("bench.csv must include a 'player' column.")
     return df
 
 
@@ -813,6 +747,8 @@ def compute_maxes(
             mx = float(s.quantile(0.95))
             maxes[lab] = mx if mx > 0 else 1.0
     return maxes
+  
+_compute_maxes = compute_maxes
 
 
 def generate_radar_chart_for_player(
@@ -822,6 +758,9 @@ def generate_radar_chart_for_player(
     custom_maxes: Optional[Dict[str, float]] = None,
     team_name: Optional[str] = None,
 ) -> Dict[str, float]:
+    """
+    Generates the radar chart PNG with 50% background transparency.
+    """
     row = pick_player_row_by_name(df_bench, player_name=player_name, team_name=team_name)
 
     labels = list(RADAR_METRICS_MAP.keys())
@@ -834,7 +773,7 @@ def generate_radar_chart_for_player(
         raw_vals.append(v)
     raw_vals = np.array(raw_vals, dtype=float)
 
-    maxes_dict = compute_maxes(df_bench, row, labels, custom_maxes)
+    maxes_dict = _compute_maxes(df_bench, row, labels, custom_maxes)
     max_vals = np.array([maxes_dict[lab] for lab in labels], dtype=float)
     max_vals = np.where(max_vals <= 0, 1.0, max_vals)
 
@@ -889,16 +828,24 @@ def generate_radar_chart_for_player(
         val_line = f"{val:.0f}" if unit == "" else f"{val:.0f} {unit}"
         ax.text(ang, R_VALUE, val_line, fontsize=13, fontweight="bold", ha=ha, va="center")
 
+    # --- FINAL PLOT STYLING (UPDATED FOR 50% TRANSPARENCY) ---
+    # --- FINAL PLOT STYLING: whole image white @ 50% + circle white @ 50% ---
     ax.spines["polar"].set_visible(False)
-    fig.patch.set_facecolor((1, 1, 1, 0.5))
-    ax.patch.set_facecolor((1, 1, 1, 0.5))
-
+    
+    # Rectangle background (outside the radar circle)
+    fig.patch.set_facecolor((1, 1, 1, 0.5))   # white, 50% alpha
+    
+    # Circle background (inside the polar axes)
+    ax.patch.set_facecolor((1, 1, 1, 0.5))    # white, 50% alpha
+    
     plt.tight_layout()
+    
+    # IMPORTANT: transparent=False, otherwise alpha gets overridden
     fig.savefig(out_png, bbox_inches="tight", transparent=False)
     plt.close(fig)
 
-    return {lab: float(v) for lab, v in zip(labels, raw_vals)}
 
+    return {lab: float(v) for lab, v in zip(labels, raw_vals)}
 
 def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[str]:
     if not player_name or not os.path.isdir(photos_dir):
@@ -910,24 +857,86 @@ def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[s
         f"{player_name}.jpeg",
         f"{player_name.strip()}.png",
     ]
+
     for name in candidates:
         p = os.path.join(photos_dir, name)
         if os.path.exists(p):
             return p
 
+    # case-insensitive fallback
     target_low = f"{player_name.lower().strip()}.png"
     for f in os.listdir(photos_dir):
         if f.lower() == target_low:
             return os.path.join(photos_dir, f)
+
     return None
 
 
+
+# ----------------------------
+# PPTX image insertion
+# ----------------------------
+def insert_image_at_token_exact(slide, token: str, image_path: str) -> int:
+    """
+    Replace a shape whose entire text equals token with an image at same position.
+    """
+    replaced = 0
+    for shape in list(slide.shapes):
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        if (shape.text_frame.text or "").strip() != token:
+            continue
+        left, top, width, height = shape.left, shape.top, shape.width, shape.height
+        remove_shape(shape)
+        slide.shapes.add_picture(image_path, left, top, width=width, height=height)
+        replaced += 1
+    return replaced
+from pptx.dml.color import RGBColor
+
+POSITION_TO_NUMBER: Dict[str, int] = {
+    # GK
+    "Goalkeeper": 1,
+
+    # Back line
+    "RightBack": 2,
+    "RightFullback": 2,
+    "Right Back": 2,
+    "Centre Back": 3,
+    "CentreBack": 3,
+    "LeftBack": 4,
+    "Left Back": 4,
+
+    # Midfield (common API variants)
+    "DefensiveMidfield": 6,
+    "Defensive Midfield": 6,
+    "CentreMidfield": 8,
+    "Centre Midfield": 8,
+    "AttackingMidfield": 10,
+    "Attacking Midfield": 10,
+
+    # Wings / forwards
+    "RightWing": 7,
+    "Right Wing": 7,
+    "Left Wing": 11,
+    "LeftWing": 11,
+    "Striker": 9,
+    "CentreForward": 9,
+    "Centre Forward": 9,
+}
+
+
+MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
+SECOND_BLUE = RGBColor(0, 142, 204)   # adjust to your exact template light-blue if needed
 def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
     if not ordered_positions:
         return
 
     main_num = POSITION_TO_NUMBER.get(ordered_positions[0])
-    secondary_nums = [POSITION_TO_NUMBER.get(p) for p in ordered_positions[1:3] if p in POSITION_TO_NUMBER]
+    secondary_nums = [
+        POSITION_TO_NUMBER.get(p)
+        for p in ordered_positions[1:3]
+        if p in POSITION_TO_NUMBER
+    ]
 
     for shape in slide.shapes:
         if not getattr(shape, "has_text_frame", False):
@@ -944,169 +953,8 @@ def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
             shape.fill.solid()
             shape.fill.fore_color.rgb = SECOND_BLUE
 
-
 # ----------------------------
-# PDF-mode formation flattening
-# ----------------------------
-def _rgbcolor_to_tuple(rgb: RGBColor) -> Tuple[int, int, int]:
-    return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
-
-
-
-def _get_picture_rel(slide, pic_shape):
-    blip = pic_shape._element.xpath(".//a:blip")
-    if not blip:
-        return None
-    r_id = blip[0].get(qn("r:embed"))
-    if not r_id:
-        return None
-    return slide.part.rels.get(r_id)
-
-def _find_pitch_picture(slide):
-    """
-    Pick the pitch: prefer TIFF / 'pasted-image' picture part (your template pitch is a TIFF).
-    """
-    pics = [sh for sh in slide.shapes if sh.shape_type == MSO_SHAPE_TYPE.PICTURE]
-    if not pics:
-        return None
-
-    scored = []
-    for p in pics:
-        rel = _get_picture_rel(slide, p)
-        partname = ""
-        if rel and hasattr(rel.target_part, "partname"):
-            partname = str(rel.target_part.partname)
-        score = 0
-        if partname.lower().endswith(".tiff") or partname.lower().endswith(".tif"):
-            score += 100
-        if "pasted" in partname.lower():
-            score += 50
-        # pitch is right side generally
-        score += int(p.left / 100000)  
-        scored.append((score, p))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1]
-
-
-def _find_number_shapes(slide) -> Dict[int, Any]:
-    out: Dict[int, Any] = {}
-    for sh in slide.shapes:
-        if not getattr(sh, "has_text_frame", False):
-            continue
-        txt = (sh.text_frame.text or "").strip()
-        if txt.isdigit():
-            n = int(txt)
-            if 1 <= n <= 11:
-                out[n] = sh
-    return out
-
-def _render_formation_png(pitch_bytes, pitch_box_emu, src_rect, num_shapes, ordered_positions, out_png_path):
-    left, top, width, height = pitch_box_emu
-    img = Image.open(io.BytesIO(pitch_bytes)).convert("RGBA")
-    img = _apply_pptx_crop(img, src_rect)
-    px_w = max(1, int(width / 9525))
-    px_h = max(1, int(height / 9525))
-    base = img.resize((px_w, px_h), Image.Resampling.LANCZOS)
-
-    emu_per_px_x = width / base.size[0]
-    emu_per_px_y = height / base.size[1]
-
-    draw = ImageDraw.Draw(base)
-
-    main_num = POSITION_TO_NUMBER.get(ordered_positions[0]) if ordered_positions else None
-    secondary_nums: List[int] = []
-    for p in (ordered_positions[1:3] if ordered_positions else []):
-        n = POSITION_TO_NUMBER.get(p)
-        if n is not None:
-            secondary_nums.append(n)
-
-    main_fill = _rgbcolor_to_tuple(MAIN_BLUE)
-    sec_fill = _rgbcolor_to_tuple(SECOND_BLUE)
-
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 18)
-    except Exception:
-        font = ImageFont.load_default()
-
-    for n, sh in num_shapes.items():
-        cx_emu = sh.left + sh.width // 2
-        cy_emu = sh.top + sh.height // 2
-
-        cx = int(round((cx_emu - left) / emu_per_px_x))
-        cy = int(round((cy_emu - top) / emu_per_px_y))
-
-        rx = max(10, int(round((sh.width / 2) / emu_per_px_x)))
-        ry = max(10, int(round((sh.height / 2) / emu_per_px_y)))
-        r = int(round((rx + ry) / 2))
-
-        fill = (255, 255, 255)
-        if main_num is not None and n == main_num:
-            fill = main_fill
-        elif n in secondary_nums:
-            fill = sec_fill
-
-        bbox = (cx - r, cy - r, cx + r, cy + r)
-        draw.ellipse(bbox, fill=fill, outline=(0, 0, 0), width=3)
-
-        text = str(n)
-        tb = draw.textbbox((0, 0), text, font=font)
-        tw, th = tb[2] - tb[0], tb[3] - tb[1]
-        draw.text((cx - tw / 2, cy - th / 2 - 1), text, fill=(0, 0, 0), font=font)
-
-    base.save(out_png_path, "PNG")
-
-
-def flatten_formation_block_for_pdf(slide, ordered_positions: List[str], tmp_dir: str) -> bool:
-    pitch_pic = _find_pitch_picture(slide)
-    if pitch_pic is None:
-        return False
-
-    blip = pitch_pic._element.xpath(".//a:blip")
-    if not blip:
-        return False
-
-    r_id = blip[0].get(qn("r:embed"))
-    if not r_id:
-        return False
-
-    rel = slide.part.rels.get(r_id)
-    if rel is None:
-        return False
-
-    pitch_bytes = rel.target_part.blob
-
-    nums = _find_number_shapes(slide)
-    if not nums:
-        return False
-
-    out_png = os.path.join(tmp_dir, "formation_flat.png")
-    src_rect = _read_src_rect(pitch_pic)
-    
-    _render_formation_png(
-        pitch_bytes=pitch_bytes,
-        pitch_box_emu=(pitch_pic.left, pitch_pic.top, pitch_pic.width, pitch_pic.height),
-        src_rect=src_rect,
-        num_shapes=nums,
-        ordered_positions=ordered_positions or [],
-        out_png_path=out_png,
-    )
-
-    remove_shape(pitch_pic)
-    for sh in nums.values():
-        remove_shape(sh)
-
-    slide.shapes.add_picture(
-        out_png,
-        left=pitch_pic.left,
-        top=pitch_pic.top,
-        width=pitch_pic.width,
-        height=pitch_pic.height,
-    )
-    return True
-
-# ----------------------------
-# Template filling (full flow)
+# Template filling (full notebook-style flow)
 # ----------------------------
 def fill_template_full(
     template_path: str,
@@ -1117,27 +965,31 @@ def fill_template_full(
     api_base: str,
     token: str,
     performance_upload_bytes: Optional[bytes],
-    *,
-    pdf_mode: bool,
 ) -> Dict[str, Any]:
-    inserted = {"player_image": 0, "radar": 0, "performance": 0, "text_shapes_changed": 0, "formation_flattened": 0}
+    inserted = {"player_image": 0, "radar": 0, "performance": 0, "text_shapes_changed": 0}
 
     if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Missing template: {template_path}")
+        raise FileNotFoundError(...)
+
     if not (api_base and token and player_id):
         raise RuntimeError("Missing api_base/token/player_id - cannot build full report values.")
 
+    # ✅ Always define values here, unconditionally
     values: Dict[str, Any] = build_personal_values(api_base, token, int(player_id))
+
+    # ✅ Ensure _POSITIONS_ORDERED exists AFTER values exists
     values.setdefault("_POSITIONS_ORDERED", [])
 
     prs = Presentation(template_path)
 
-    # Seasons
+    # Build values (old logic)
+
+    # Seasons + latest
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
     season_ids_latest3 = pick_latest_season_ids(seasons_obj, n=3)
     latest_season_id = season_ids_latest3[0] if season_ids_latest3 else 0
 
-    # Stats
+    # Stats + strengths
     stats = get_games_minutes_goals_assists(
         api_base=api_base,
         token=token,
@@ -1150,7 +1002,7 @@ def fill_template_full(
     values["GOALS"] = str(stats.get("GOALS", 0))
     values["ASSISTS"] = str(stats.get("ASSISTS", 0))
 
-    strengths_line, _percentile = compute_strengths_and_percentile_from_api(
+    strengths_line, percentile = compute_strengths_and_percentile_from_api(
         api_base=api_base,
         token=token,
         player_id=int(player_id),
@@ -1158,7 +1010,7 @@ def fill_template_full(
     )
     values["STRENGTHS"] = strengths_line
 
-    # Player image bytes
+    # Player image bytes (local first; fallback API imageUrl)
     player_img_bytes: Optional[bytes] = None
     local_path = (
         get_local_player_image_path(values.get("PLAYER_NAME") or "", PLAYER_PHOTOS_DIR)
@@ -1180,50 +1032,47 @@ def fill_template_full(
         team_name=values.get("CLUB_2024/2025") or values.get("CLUB_2023/2024") or None,
     )
 
-    # Performance chart
+    # Performance chart: upload wins; else auto-generate like notebook
     perf_png: Optional[str] = None
     perf_used = "missing"
+    
     if performance_upload_bytes:
         perf_png = os.path.join(os.path.dirname(out_pptx_path), "performance_chart.png")
         with open(perf_png, "wb") as f:
             f.write(performance_upload_bytes)
         perf_used = "uploaded"
 
-    # Apply per-slide
+    
+        inserted = {
+            "player_image": 0,
+            "radar": 0,
+            "performance": 0,
+            "text_shapes_changed": 0,
+        }
+
     for slide in prs.slides:
         if player_img_bytes:
             inserted["player_image"] += replace_textbox_exact_with_image(slide, "{IMAGE}", player_img_bytes)
-
+    
         inserted["radar"] += insert_image_at_token_exact(slide, "{{RADAR_CHART}}", radar_png)
-
+    
         if perf_png:
             inserted["performance"] += insert_image_at_token_exact(slide, "{{PERFORMANCE_CHART}}", perf_png)
             inserted["performance"] += replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_upload_bytes)
-
-        for shape in slide.shapes:
-            if replace_tokens_in_shape(shape, values, pdf_mode=pdf_mode):
-                inserted["text_shapes_changed"] += 1
-
-            if getattr(shape, "has_text_frame", False):
-                if (shape.text_frame.text or "").strip() == (values.get("PLAYER_NAME") or ""):
-                    if pdf_mode:
-                        _shrink_font_for_long_name(shape, values.get("PLAYER_NAME") or "")
-
-        if not pdf_mode:
-            apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
-        else:
-            ok = flatten_formation_block_for_pdf(
-                slide,
-                values.get("_POSITIONS_ORDERED", []),
-                os.path.dirname(out_pptx_path),
-            )
-            inserted["formation_flattened"] += int(ok)
+    
+    for shape in slide.shapes:
+        if replace_tokens_in_shape(shape, values):
+            inserted["text_shapes_changed"] += 1
+    
+    apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
+    
 
     prs.save(out_pptx_path)
+
     return {
         "player_name_ui": player_name_ui,
         "player_id": player_id,
-        "values_keys": sorted([k for k in values.keys() if not str(k).startswith("_")]),
+        "values_keys": sorted([k for k in values.keys() if not k.startswith("_")]),
         "radar_used": radar_used,
         "perf_used": perf_used,
         "inserted": inserted,
@@ -1231,7 +1080,7 @@ def fill_template_full(
 
 
 # ----------------------------
-# PDF conversion
+# PDF conversion (best-effort)
 # ----------------------------
 def can_convert_to_pdf() -> bool:
     return shutil.which("soffice") is not None
@@ -1249,12 +1098,12 @@ def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
         "--nodefault",
         "--nofirststartwizard",
         "--convert-to",
-        "pdf:impress_pdf_Export",
+        "pdf",
         "--outdir",
         out_dir,
         pptx_path,
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         raise RuntimeError(f"PDF conversion failed.\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
 
@@ -1272,12 +1121,26 @@ def main() -> None:
     st.set_page_config(page_title="Player Report Generator", layout="wide")
     st.title("Player Report Generator (PPTX / PDF)")
 
+    # Session state
     st.session_state.setdefault("access_token", None)
     st.session_state.setdefault("api_base", None)
     st.session_state.setdefault("pptx_bytes", None)
     st.session_state.setdefault("pdf_bytes", None)
     st.session_state.setdefault("last_filename_base", None)
 
+    # # Health checks
+    # col_a, col_b, col_c = st.columns(3)
+    # with col_a:
+    #     st.caption("Template")
+    #     st.write("✅" if os.path.exists(TEMPLATE_PPTX_PATH) else f"❌ Missing: {TEMPLATE_PPTX_PATH}")
+    # with col_b:
+    #     st.caption("bench.csv")
+    #     st.write("✅" if os.path.exists(BENCH_CSV_PATH) else f"❌ Missing: {BENCH_CSV_PATH}")
+    # with col_c:
+    #     st.caption("PDF export")
+    #     st.write("✅ LibreOffice found" if can_convert_to_pdf() else "⚠️ LibreOffice not found (PPTX only)")
+
+    # Load bench.csv
     try:
         df_bench = load_bench_csv(BENCH_CSV_PATH)
     except Exception as e:
@@ -1286,6 +1149,7 @@ def main() -> None:
 
     st.divider()
 
+    # Step 1
     st.subheader("Step 1 — Generate access token (required)")
     cols = st.columns([1, 2])
     with cols[0]:
@@ -1310,6 +1174,7 @@ def main() -> None:
 
     st.divider()
 
+    # Step 2
     st.subheader("Step 2 — Select player and generate report")
     left, right = st.columns([1, 1])
 
@@ -1331,9 +1196,8 @@ def main() -> None:
         if perf_file:
             st.success("Performance chart uploaded.")
 
-
     generate = st.button("Generate PPTX and PDF", type="primary")
-  
+
     if generate:
         if not st.session_state["access_token"]:
             st.error("No valid access token. Generate the access token first.")
@@ -1341,19 +1205,17 @@ def main() -> None:
         if not st.session_state.get("api_base"):
             st.error("Missing API base_url in secrets (key: base_url).")
             st.stop()
-    
+
         token = st.session_state["access_token"]
         api_base = st.session_state["api_base"]
-    
+
         with st.spinner("Generating report..."):
             try:
                 with tempfile.TemporaryDirectory() as td:
                     base_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", player_label).strip("_") or "player_report"
-                    st.session_state["last_filename_base"] = base_name
-    
-                    # 1) Editable PPTX (NO PDF hardening)
                     out_pptx_path = os.path.join(td, f"{base_name}.pptx")
-                    meta_pptx = fill_template_full(
+
+                    meta = fill_template_full(
                         template_path=TEMPLATE_PPTX_PATH,
                         out_pptx_path=out_pptx_path,
                         df_bench=df_bench,
@@ -1362,43 +1224,34 @@ def main() -> None:
                         api_base=api_base,
                         token=token,
                         performance_upload_bytes=perf_bytes,
-                        pdf_mode=False,
                     )
+
                     with open(out_pptx_path, "rb") as f:
                         st.session_state["pptx_bytes"] = f.read()
-    
-                    # 2) PDF: ALWAYS generate a separate PPTX with pdf_mode=True, then convert
+
+                    st.session_state["last_filename_base"] = base_name
+
                     st.session_state["pdf_bytes"] = None
-                    meta_pdf = None
                     if can_convert_to_pdf():
-                        out_pptx_pdf_path = os.path.join(td, f"{base_name}__pdf.pptx")
-                        meta_pdf = fill_template_full(
-                            template_path=TEMPLATE_PPTX_PATH,
-                            out_pptx_path=out_pptx_pdf_path,
-                            df_bench=df_bench,
-                            player_name_ui=player_label,
-                            player_id=int(player_id),
-                            api_base=api_base,
-                            token=token,
-                            performance_upload_bytes=perf_bytes,
-                            pdf_mode=True,  # <-- ALWAYS TRUE for PDF
-                        )
-                        pdf_path = convert_pptx_to_pdf(out_pptx_pdf_path, td)
-                        with open(pdf_path, "rb") as f:
-                            st.session_state["pdf_bytes"] = f.read()
-                    else:
-                        st.warning("LibreOffice not found (PPTX only).")
-    
+                        try:
+                            pdf_path = convert_pptx_to_pdf(out_pptx_path, td)
+                            with open(pdf_path, "rb") as f:
+                                st.session_state["pdf_bytes"] = f.read()
+                        except Exception as e:
+                            st.warning(f"PDF conversion failed (PPTX still available): {e}")
+
                 st.success("Report generated.")
                 with st.expander("Generation details"):
-                    st.json({"pptx": meta_pptx, "pdf": meta_pdf})
-    
+                    st.json(meta)
+
             except Exception as e:
                 st.session_state["pptx_bytes"] = None
                 st.session_state["pdf_bytes"] = None
                 st.error(f"Generation failed: {e}")
+
     st.divider()
 
+    # Downloads
     st.subheader("Downloads")
     base = st.session_state.get("last_filename_base") or "player_report"
 
