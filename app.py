@@ -1266,10 +1266,9 @@ def main() -> None:
         if perf_file:
             st.success("Performance chart uploaded.")
 
-    pdf_fidelity_mode = st.checkbox("PDF fidelity mode (flatten formation block)", value=True)
 
     generate = st.button("Generate PPTX and PDF", type="primary")
-
+  
     if generate:
         if not st.session_state["access_token"]:
             st.error("No valid access token. Generate the access token first.")
@@ -1277,18 +1276,19 @@ def main() -> None:
         if not st.session_state.get("api_base"):
             st.error("Missing API base_url in secrets (key: base_url).")
             st.stop()
-
+    
         token = st.session_state["access_token"]
         api_base = st.session_state["api_base"]
-
+    
         with st.spinner("Generating report..."):
             try:
                 with tempfile.TemporaryDirectory() as td:
                     base_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", player_label).strip("_") or "player_report"
-
-                    # 1) Editable PPTX
+                    st.session_state["last_filename_base"] = base_name
+    
+                    # 1) Editable PPTX (NO PDF hardening)
                     out_pptx_path = os.path.join(td, f"{base_name}.pptx")
-                    meta = fill_template_full(
+                    meta_pptx = fill_template_full(
                         template_path=TEMPLATE_PPTX_PATH,
                         out_pptx_path=out_pptx_path,
                         df_bench=df_bench,
@@ -1299,45 +1299,39 @@ def main() -> None:
                         performance_upload_bytes=perf_bytes,
                         pdf_mode=False,
                     )
-
                     with open(out_pptx_path, "rb") as f:
                         st.session_state["pptx_bytes"] = f.read()
-                    st.session_state["last_filename_base"] = base_name
-
-                    # 2) PDF generation uses a second PPTX (optionally flattened)
+    
+                    # 2) PDF: ALWAYS generate a separate PPTX with pdf_mode=True, then convert
                     st.session_state["pdf_bytes"] = None
+                    meta_pdf = None
                     if can_convert_to_pdf():
-                        try:
-                            out_pptx_pdf_path = os.path.join(td, f"{base_name}__pdf.pptx")
-                            meta_pdf = fill_template_full(
-                                template_path=TEMPLATE_PPTX_PATH,
-                                out_pptx_path=out_pptx_pdf_path,
-                                df_bench=df_bench,
-                                player_name_ui=player_label,
-                                player_id=int(player_id),
-                                api_base=api_base,
-                                token=token,
-                                performance_upload_bytes=perf_bytes,
-                                pdf_mode=bool(pdf_fidelity_mode),
-                            )
-                            pdf_path = convert_pptx_to_pdf(out_pptx_pdf_path, td)
-                            with open(pdf_path, "rb") as f:
-                                st.session_state["pdf_bytes"] = f.read()
-                        except Exception as e:
-                            st.warning(f"PDF conversion failed (PPTX still available): {e}")
-                            meta_pdf = None
+                        out_pptx_pdf_path = os.path.join(td, f"{base_name}__pdf.pptx")
+                        meta_pdf = fill_template_full(
+                            template_path=TEMPLATE_PPTX_PATH,
+                            out_pptx_path=out_pptx_pdf_path,
+                            df_bench=df_bench,
+                            player_name_ui=player_label,
+                            player_id=int(player_id),
+                            api_base=api_base,
+                            token=token,
+                            performance_upload_bytes=perf_bytes,
+                            pdf_mode=True,  # <-- ALWAYS TRUE for PDF
+                        )
+                        pdf_path = convert_pptx_to_pdf(out_pptx_pdf_path, td)
+                        with open(pdf_path, "rb") as f:
+                            st.session_state["pdf_bytes"] = f.read()
                     else:
-                        meta_pdf = None
-
+                        st.warning("LibreOffice not found (PPTX only).")
+    
                 st.success("Report generated.")
                 with st.expander("Generation details"):
-                    st.json({"pptx": meta, "pdf": meta_pdf})
-
+                    st.json({"pptx": meta_pptx, "pdf": meta_pdf})
+    
             except Exception as e:
                 st.session_state["pptx_bytes"] = None
                 st.session_state["pdf_bytes"] = None
                 st.error(f"Generation failed: {e}")
-
     st.divider()
 
     st.subheader("Downloads")
