@@ -58,10 +58,6 @@ import requests
 import streamlit as st
 from pptx import Presentation
 
-from __future__ import annotations
-
-from typing import Any, Dict, List, Optional
-import re
 
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Pt
