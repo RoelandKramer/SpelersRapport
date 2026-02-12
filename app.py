@@ -87,6 +87,14 @@ FC_DEN_BOSCH_PLAYERS = [
     {"name": "Luc van Koeverden", "player_id": 673690},
 ]
 
+CUSTOM_MAXES = {
+    "Total distance (m)": 13750,
+    "HI distance (m)": 1650,
+    "Sprint distance (m)": 600,
+    "HI runs": 50,
+    "Sprint runs": 25,
+}
+
 SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
 
 def _is_toto_knvb_beker_nld(item: dict) -> bool:
