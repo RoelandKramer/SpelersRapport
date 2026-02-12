@@ -1089,48 +1089,31 @@ def can_convert_to_pdf() -> bool:
 
 
 def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
-    if not can_convert_to_pdf():
+    if shutil.which("unoconv") is None:
+        raise RuntimeError("unoconv not found on PATH.")
+    if shutil.which("soffice") is None:
         raise RuntimeError("LibreOffice (soffice) not found on PATH.")
 
-    # Use a dedicated LO user profile per conversion (more stable on servers/Streamlit Cloud)
     profile_dir = Path(out_dir) / "lo_profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
-    profile_uri = profile_dir.resolve().as_uri()
 
-    # PDF export params (Linux/macOS quoting style)
-    # Key ones for "PowerPoint-like" quality:
-    # - ReduceImageResolution=false (avoid downsampling)
-    # - UseLosslessCompression=true (avoid JPEG artifacts)
-    # - EmbedStandardFonts=true (more consistent text rendering)
-    convert_to = (
-        'pdf:impress_pdf_Export:'
-        '{"ReduceImageResolution":{"type":"boolean","value":"false"},'
-        '"UseLosslessCompression":{"type":"boolean","value":"true"},'
-        '"EmbedStandardFonts":{"type":"boolean","value":"true"},'
-        '"MaxImageResolution":{"type":"long","value":"1200"}}'
-    )
-
+    # unoconv lets us pass a filter, and it tends to preserve layout better
+    # than a bare soffice --convert-to pdf on some templates.
     cmd = [
-        "soffice",
-        "--headless",
-        "--nologo",
-        "--nolockcheck",
-        "--nodefault",
-        "--nofirststartwizard",
-        "--norestore",
-        f"-env:UserInstallation={profile_uri}",
-        "--convert-to",
-        convert_to,
-        "--outdir",
-        out_dir,
+        "unoconv",
+        "-f", "pdf",
+        "-o", out_dir,
+        "-e", "FilterName=impress_pdf_Export",
+        "-e", "ReduceImageResolution=false",
+        "-e", "UseLosslessCompression=true",
+        "-e", "EmbedStandardFonts=true",
+        "-e", "MaxImageResolution=1200",
         pptx_path,
     ]
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"PDF conversion failed.\nCMD:\n{cmd}\n\nSTDOUT:\n{proc.stdout}\n\nSTDERR:\n{proc.stderr}"
-        )
+        raise RuntimeError(f"PDF conversion failed.\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
 
     pdf_name = os.path.splitext(os.path.basename(pptx_path))[0] + ".pdf"
     pdf_path = os.path.join(out_dir, pdf_name)
