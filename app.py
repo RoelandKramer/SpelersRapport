@@ -1042,7 +1042,7 @@ def generate_radar_chart_for_player(
     ax.patch.set_facecolor((1, 1, 1, 0.5))    # circle background
 
     # Symmetric margins -> keeps the radar centered in the exported image
-    fig.subplots_adjust(left=0.12, right=0.88, top=0.92, bottom=0.08)
+    fig.subplots_adjust(left=0.12, right=0.88, top=0.95, bottom=0.05)
     fig.savefig(out_png, transparent=False)
 
     plt.close(fig)
