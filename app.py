@@ -429,12 +429,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     roles_sorted = sorted(roles, key=lambda rr: rr.get("fit") or 0, reverse=True)
     top_roles = ", ".join([rr.get("role") for rr in roles_sorted[:3] if rr.get("role")])
 
-    xmetrics_obj = api_get_json(
-        api_base,
-        token,
-        "/api/v2/metrics/players/x-metrics",
-        params={"PlayerIds": player_id, "SeasonIds": season_ids, "P90": True, "Limit": 200},
-    )
+
     x_items = items_of(xmetrics_obj)
 
     season_team_best: Dict[str, Dict[str, Any]] = {}
@@ -448,6 +443,12 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         prev = season_team_best.get(sname)
         if prev is None or mins > (prev.get("mins") or 0):
             season_team_best[sname] = {"team": tname, "mins": mins}
+
+    values.update({
+      "CLUB_2024/2025": (season_team_best.get("2024/2025") or {}).get("team", ""),
+      "CLUB_2023/2024": (season_team_best.get("2023/2024") or {}).get("team", ""),
+      "CLUB_2022/2023": (season_team_best.get("2022/2023") or {}).get("team", ""),
+      })
         
     nats = info.get("nationalities") or []
     nat_name = (nats[0].get("name") if nats else None) or (info.get("birthCountry") or {}).get("name") or ""
@@ -500,75 +501,140 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     values["_TEAM_IMAGE_URL"] = team.get("imageUrl") or ""
     return values
 
+from typing import Any, Dict, List, Optional, Tuple
 
-def get_games_minutes_goals_assists(
+
+def _normalize_season_name(name: str) -> str:
+    return normalize_season_label(name) if "normalize_season_label" in globals() else str(name).strip()
+
+
+def build_season_id_by_label(seasons_obj: dict) -> Dict[str, int]:
+    """
+    Returns mapping like {"2024/2025": 123, ...} based on /api/v2/Seasons response.
+    """
+    out: Dict[str, int] = {}
+    for it in items_of(seasons_obj):
+        sid = it.get("id")
+        sname = _normalize_season_name((it.get("name") or "").strip())
+        if isinstance(sid, int) and sname:
+            out[sname] = sid
+    return out
+
+
+def _find_stat(stats: dict, keys: List[str]) -> float:
+    for k in keys:
+        if k in stats:
+            return safe_num(stats[k])
+    lower = {str(k).lower(): k for k in stats.keys()}
+    for k in keys:
+        lk = k.lower()
+        if lk in lower:
+            return safe_num(stats[lower[lk]])
+    return 0.0
+
+
+def get_games_minutes_goals_assists_by_season(
     api_base: str,
     token: str,
     player_id: int,
     season_ids: List[int],
-    preferred_season_id: Optional[int] = None,
-) -> Dict[str, int]:
+) -> Dict[int, Dict[str, int]]:
+    """
+    Returns {season_id: {"GAMES":..,"MINUTES":..,"GOALS":..,"ASSISTS":..}} for ALL given seasons.
+    Seasons with no items in both endpoints are omitted (treated as missing).
+    """
+    # --- Contribution ratings: games + minutes ---
     cr = api_get_json(
         api_base,
         token,
         "/api/v2/metrics/players/contribution-ratings",
-        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 200},
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
     )
     cr_items = cr.get("items") or []
 
-    if preferred_season_id is None:
-        season_candidates = [it.get("season", {}).get("id") for it in cr_items if it.get("season")]
-        season_candidates = [sid for sid in season_candidates if isinstance(sid, int)]
-        target_season_id = max(season_candidates) if season_candidates else (max(season_ids) if season_ids else None)
-    else:
-        target_season_id = preferred_season_id
-
-    games = 0
-    minutes = 0
+    gm_by_sid: Dict[int, Dict[str, int]] = {}
     for it in cr_items:
         sid = (it.get("season") or {}).get("id")
-        if sid != target_season_id:
+        if not isinstance(sid, int):
             continue
         stats = it.get("stats") or {}
-        games += int(round(safe_num(stats.get("matchesPlayed"))))
-        minutes += int(round(safe_num(stats.get("minutesPlayed"))))
+        gm_by_sid.setdefault(sid, {"GAMES": 0, "MINUTES": 0})
+        gm_by_sid[sid]["GAMES"] += int(round(safe_num(stats.get("matchesPlayed"))))
+        gm_by_sid[sid]["MINUTES"] += int(round(safe_num(stats.get("minutesPlayed"))))
 
+    # --- Career stats: goals + assists ---
     cs = api_get_json(
         api_base,
         token,
         "/api/v2/metrics/career-stats/players",
-        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 200},
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
     )
     cs_items = cs.get("items") or []
 
-    def find_stat(stats: dict, keys: List[str]) -> float:
-        for k in keys:
-            if k in stats:
-                return safe_num(stats[k])
-        lower = {str(k).lower(): k for k in stats.keys()}
-        for k in keys:
-            lk = k.lower()
-            if lk in lower:
-                return safe_num(stats[lower[lk]])
-        return 0.0
-
-    goals = 0
-    assists = 0
+    ga_by_sid: Dict[int, Dict[str, int]] = {}
     for it in cs_items:
         sid = (it.get("season") or {}).get("id") or it.get("seasonId")
-        if sid != target_season_id:
+        if not isinstance(sid, int):
             continue
         stats = it.get("stats") or {}
-        goals = max(goals, int(round(find_stat(stats, ["goal", "goals", "goalNonPenalty", "goal_non_penalty"]))))
-        assists = max(assists, int(round(find_stat(stats, ["assist", "assists"]))))
+        goals = int(round(_find_stat(stats, ["goal", "goals", "goalNonPenalty", "goal_non_penalty"])))
+        assists = int(round(_find_stat(stats, ["assist", "assists"])))
+        prev = ga_by_sid.get(sid)
+        if prev is None:
+            ga_by_sid[sid] = {"GOALS": goals, "ASSISTS": assists}
+        else:
+            ga_by_sid[sid]["GOALS"] = max(prev["GOALS"], goals)
+            ga_by_sid[sid]["ASSISTS"] = max(prev["ASSISTS"], assists)
 
-    return {
-        "season_id": int(target_season_id) if target_season_id is not None else 0,
-        "GAMES": int(games),
-        "MINUTES": int(minutes),
-        "GOALS": int(goals),
-        "ASSISTS": int(assists),
-    }
+    # --- Merge; omit seasons missing in BOTH sources ---
+    out: Dict[int, Dict[str, int]] = {}
+    for sid in season_ids:
+        has_gm = sid in gm_by_sid
+        has_ga = sid in ga_by_sid
+        if not (has_gm or has_ga):
+            continue
+
+        out[sid] = {
+            "GAMES": int(gm_by_sid.get(sid, {}).get("GAMES", 0)),
+            "MINUTES": int(gm_by_sid.get(sid, {}).get("MINUTES", 0)),
+            "GOALS": int(ga_by_sid.get(sid, {}).get("GOALS", 0)),
+            "ASSISTS": int(ga_by_sid.get(sid, {}).get("ASSISTS", 0)),
+        }
+    return out
+
+
+def apply_season_row_tokens(
+    values: Dict[str, str],
+    season_label: str,
+    season_id_by_label: Dict[str, int],
+    stats_by_sid: Dict[int, Dict[str, int]],
+    club_team_by_label: Dict[str, Dict[str, Any]],
+    club_key: str,
+    g_key: str,
+    m_key: str,
+    go_key: str,
+    a_key: str,
+) -> None:
+    """
+    If season missing -> blanks CLUB + all stats placeholders.
+    """
+    sid = season_id_by_label.get(season_label)
+    stats = stats_by_sid.get(sid) if isinstance(sid, int) else None
+
+    if not sid or stats is None:
+        values[club_key] = ""
+        values[g_key] = ""
+        values[m_key] = ""
+        values[go_key] = ""
+        values[a_key] = ""
+        return
+
+    club = (club_team_by_label.get(season_label) or {}).get("team", "")
+    values[club_key] = str(club or "")
+    values[g_key] = str(stats["GAMES"])
+    values[m_key] = str(stats["MINUTES"])
+    values[go_key] = str(stats["GOALS"])
+    values[a_key] = str(stats["ASSISTS"])
 
 
 def compute_strengths_and_percentile_from_api(
@@ -1076,19 +1142,80 @@ def fill_template_full(
     season_ids_latest3 = pick_latest_season_ids(seasons_obj, n=3)
     latest_season_id = season_ids_latest3[0] if season_ids_latest3 else 0
 
-    # Stats + strengths
-    stats = get_games_minutes_goals_assists(
+    seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
+    season_ids_latest5 = pick_latest_season_ids(seasons_obj, n=5)
+    
+    season_id_by_label = build_season_id_by_label(seasons_obj)
+    
+    # we need these 3 seasons (plus your "current row" still uses latest_season_id)
+    target_labels = ["2024/2025", "2023/2024", "2022/2023"]
+    
+    # collect season ids that exist
+    target_season_ids = [season_id_by_label[lbl] for lbl in target_labels if lbl in season_id_by_label]
+    
+    # fetch stats for all target seasons in one go
+    stats_by_sid = get_games_minutes_goals_assists_by_season(
         api_base=api_base,
         token=token,
-        player_id=int(player_id),
-        season_ids=[latest_season_id] if latest_season_id else season_ids_latest3,
-        preferred_season_id=latest_season_id if latest_season_id else None,
+        player_id=player_id,
+        season_ids=target_season_ids,
     )
-    values["GAMES"] = str(stats.get("GAMES", 0))
-    values["MINUTES"] = str(stats.get("MINUTES", 0))
-    values["GOALS"] = str(stats.get("GOALS", 0))
-    values["ASSISTS"] = str(stats.get("ASSISTS", 0))
-
+    
+    # Keep your existing "current" top row logic (latest season stats)
+    # (If you want this row empty when missing too, you can use stats_by_sid similarly.)
+    latest_season_id = season_ids_latest5[0] if season_ids_latest5 else 0
+    latest_stats_map = get_games_minutes_goals_assists_by_season(
+        api_base=api_base,
+        token=token,
+        player_id=player_id,
+        season_ids=[latest_season_id] if latest_season_id else [],
+    )
+    latest_stats = latest_stats_map.get(latest_season_id)
+    
+    values["GAMES"] = str(latest_stats["GAMES"]) if latest_stats else ""
+    values["MINUTES"] = str(latest_stats["MINUTES"]) if latest_stats else ""
+    values["GOALS"] = str(latest_stats["GOALS"]) if latest_stats else ""
+    values["ASSISTS"] = str(latest_stats["ASSISTS"]) if latest_stats else ""
+    
+    # Apply 3 historical rows (blank everything if missing)
+    apply_season_row_tokens(
+        values=values,
+        season_label="2024/2025",
+        season_id_by_label=season_id_by_label,
+        stats_by_sid=stats_by_sid,
+        club_team_by_label=season_team_best,  # from build_personal_values
+        club_key="CLUB_2024/2025",
+        g_key="G24/25",
+        m_key="M24/25",
+        go_key="GO24/25",
+        a_key="A24/25",
+    )
+    
+    apply_season_row_tokens(
+        values=values,
+        season_label="2023/2024",
+        season_id_by_label=season_id_by_label,
+        stats_by_sid=stats_by_sid,
+        club_team_by_label=season_team_best,
+        club_key="CLUB_2023/2024",
+        g_key="G23/24",
+        m_key="M23/24",
+        go_key="GO23/24",
+        a_key="A23/24",
+    )
+    
+    apply_season_row_tokens(
+        values=values,
+        season_label="2022/2023",
+        season_id_by_label=season_id_by_label,
+        stats_by_sid=stats_by_sid,
+        club_team_by_label=season_team_best,
+        club_key="CLUB_2022/2023",
+        g_key="G22/23",
+        m_key="M22/23",
+        go_key="GO22/23",
+        a_key="A22/23",
+    )
     strengths_line, percentile = compute_strengths_and_percentile_from_api(
         api_base=api_base,
         token=token,
