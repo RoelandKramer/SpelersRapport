@@ -5,3 +5,4 @@ matplotlib>=3.7
 python-pptx>=0.6.21
 requests>=2.31
 Pillow>=10.0
+msal
