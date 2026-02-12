@@ -980,7 +980,7 @@ def generate_radar_chart_for_player(
         handles,
         legend_labels,
         loc="upper right",
-        bbox_to_anchor=(1.01, 1.01),
+        bbox_to_anchor=(1.07, 1.07),
         frameon=False,
         fontsize=10,
     )
