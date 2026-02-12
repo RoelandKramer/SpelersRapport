@@ -38,6 +38,7 @@ Notes:
 
 from __future__ import annotations
 
+
 import io
 import math
 import os
@@ -1084,29 +1085,40 @@ def fill_template_full(
 # PDF conversion (best-effort)
 # ----------------------------
 def can_convert_to_pdf() -> bool:
-    return shutil.which("unoconv") is not None and shutil.which("soffice") is not None
+    return shutil.which("soffice") is not None
 
 
 def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
-    if shutil.which("unoconv") is None:
-        raise RuntimeError("unoconv not found on PATH.")
     if shutil.which("soffice") is None:
         raise RuntimeError("LibreOffice (soffice) not found on PATH.")
 
+    # Dedicated LO profile to avoid first-run + font cache weirdness on Streamlit Cloud
     profile_dir = Path(out_dir) / "lo_profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_uri = profile_dir.resolve().as_uri()
 
-    # unoconv lets us pass a filter, and it tends to preserve layout better
-    # than a bare soffice --convert-to pdf on some templates.
+    # Force Impress PDF export filter + disable image downsampling + lossless compression
+    convert_to = (
+        'pdf:impress_pdf_Export:'
+        '{"ReduceImageResolution":{"type":"boolean","value":"false"},'
+        '"UseLosslessCompression":{"type":"boolean","value":"true"},'
+        '"EmbedStandardFonts":{"type":"boolean","value":"true"},'
+        '"MaxImageResolution":{"type":"long","value":"1200"}}'
+    )
+
     cmd = [
-        "unoconv",
-        "-f", "pdf",
-        "-o", out_dir,
-        "-e", "FilterName=impress_pdf_Export",
-        "-e", "ReduceImageResolution=false",
-        "-e", "UseLosslessCompression=true",
-        "-e", "EmbedStandardFonts=true",
-        "-e", "MaxImageResolution=1200",
+        "soffice",
+        "--headless",
+        "--nologo",
+        "--nolockcheck",
+        "--nodefault",
+        "--nofirststartwizard",
+        "--norestore",
+        f"-env:UserInstallation={profile_uri}",
+        "--convert-to",
+        convert_to,
+        "--outdir",
+        out_dir,
         pptx_path,
     ]
 
