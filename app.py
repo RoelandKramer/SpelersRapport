@@ -1147,22 +1147,13 @@ def fill_template_full(
     # Build values (old logic)
 
     # Seasons + latest
-    seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
-    season_ids_latest3 = pick_latest_season_ids(seasons_obj, n=3)
-    latest_season_id = season_ids_latest3[0] if season_ids_latest3 else 0
-
-    seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
+    seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
     season_ids_latest5 = pick_latest_season_ids(seasons_obj, n=5)
-    
     season_id_by_label = build_season_id_by_label(seasons_obj)
     
-    # we need these 3 seasons (plus your "current row" still uses latest_season_id)
     target_labels = ["2024/2025", "2023/2024", "2022/2023"]
-    
-    # collect season ids that exist
     target_season_ids = [season_id_by_label[lbl] for lbl in target_labels if lbl in season_id_by_label]
     
-    # fetch stats for all target seasons in one go
     stats_by_sid = get_games_minutes_goals_assists_by_season(
         api_base=api_base,
         token=token,
@@ -1170,8 +1161,6 @@ def fill_template_full(
         season_ids=target_season_ids,
     )
     
-    # Keep your existing "current" top row logic (latest season stats)
-    # (If you want this row empty when missing too, you can use stats_by_sid similarly.)
     latest_season_id = season_ids_latest5[0] if season_ids_latest5 else 0
     latest_stats_map = get_games_minutes_goals_assists_by_season(
         api_base=api_base,
@@ -1186,13 +1175,11 @@ def fill_template_full(
     values["GOALS"] = str(latest_stats["GOALS"]) if latest_stats else ""
     values["ASSISTS"] = str(latest_stats["ASSISTS"]) if latest_stats else ""
     
-    # Apply 3 historical rows (blank everything if missing)
-    apply_season_row_tokens(
+    apply_season_row_tokens_blank_if_missing(
         values=values,
         season_label="2024/2025",
         season_id_by_label=season_id_by_label,
         stats_by_sid=stats_by_sid,
-        club_team_by_label=season_team_best,  # from build_personal_values
         club_key="CLUB_2024/2025",
         g_key="G24/25",
         m_key="M24/25",
@@ -1200,12 +1187,11 @@ def fill_template_full(
         a_key="A24/25",
     )
     
-    apply_season_row_tokens(
+    apply_season_row_tokens_blank_if_missing(
         values=values,
         season_label="2023/2024",
         season_id_by_label=season_id_by_label,
         stats_by_sid=stats_by_sid,
-        club_team_by_label=season_team_best,
         club_key="CLUB_2023/2024",
         g_key="G23/24",
         m_key="M23/24",
@@ -1213,18 +1199,19 @@ def fill_template_full(
         a_key="A23/24",
     )
     
-    apply_season_row_tokens(
+    apply_season_row_tokens_blank_if_missing(
         values=values,
         season_label="2022/2023",
         season_id_by_label=season_id_by_label,
         stats_by_sid=stats_by_sid,
-        club_team_by_label=season_team_best,
         club_key="CLUB_2022/2023",
         g_key="G22/23",
         m_key="M22/23",
         go_key="GO22/23",
         a_key="A22/23",
     )
+
+
     strengths_line, percentile = compute_strengths_and_percentile_from_api(
         api_base=api_base,
         token=token,
