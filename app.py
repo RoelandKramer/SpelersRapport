@@ -1084,8 +1084,7 @@ def fill_template_full(
 # PDF conversion (best-effort)
 # ----------------------------
 def can_convert_to_pdf() -> bool:
-    return shutil.which("soffice") is not None
-
+    return shutil.which("unoconv") is not None and shutil.which("soffice") is not None
 
 
 def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
