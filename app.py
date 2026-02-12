@@ -980,7 +980,7 @@ def generate_radar_chart_for_player(
         handles,
         legend_labels,
         loc="upper right",
-        bbox_to_anchor=(1.18, 1.15),
+        bbox_to_anchor=(1.01, 1.01),
         frameon=False,
         fontsize=10,
     )
@@ -1006,7 +1006,10 @@ def generate_radar_chart_for_player(
             txt = f"{v:.0f}" if unit == "" else f"{v:.0f} {unit}"
             ax.text(ang, r, txt, fontsize=tick_fontsize, ha="center", va="center")
 
-    R_VALUE = 1.15
+    R_VALUE = 1.15  # keep default for all
+    TOTAL_DISTANCE_VALUE_R = 1.08
+    TOTAL_DISTANCE_NAME_R = 1.12
+    
     for lab, ang, val in zip(labels, angles, raw_vals):
         name, unit = _split_label_unit(lab)
         a = (ang + np.pi / 2) % (2 * np.pi)
@@ -1017,6 +1020,20 @@ def generate_radar_chart_for_player(
             ha = "right"
         else:
             ha = "center"
+    
+        # default positions
+        r_name = NAME_R_MULT.get(lab, DEFAULT_NAME_R)
+        r_value = R_VALUE
+    
+        # only adjust Total distance
+        if lab == "Total distance (m)":
+            r_name = TOTAL_DISTANCE_NAME_R
+            r_value = TOTAL_DISTANCE_VALUE_R
+    
+        ax.text(ang, r_name, name, fontsize=13, fontweight="bold", ha=ha, va="center")
+        val_line = f"{val:.0f}" if unit == "" else f"{val:.0f} {unit}"
+        ax.text(ang, r_value, val_line, fontsize=13, fontweight="bold", ha=ha, va="center")
+
 
         R_NAME = NAME_R_MULT.get(lab, DEFAULT_NAME_R)
         ax.text(ang, R_NAME, name, fontsize=13, fontweight="bold", ha=ha, va="center")
@@ -1029,8 +1046,10 @@ def generate_radar_chart_for_player(
     fig.patch.set_facecolor((1, 1, 1, 0.5))   # rectangle background
     ax.patch.set_facecolor((1, 1, 1, 0.5))    # circle background
 
-    plt.tight_layout()
-    fig.savefig(out_png, bbox_inches="tight", transparent=False)
+    # Symmetric margins -> keeps the radar centered in the exported image
+    fig.subplots_adjust(left=0.08, right=0.92, top=0.92, bottom=0.08)
+    fig.savefig(out_png, transparent=False)
+
     plt.close(fig)
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
