@@ -980,7 +980,7 @@ def generate_radar_chart_for_player(
         handles,
         legend_labels,
         loc="upper right",
-        bbox_to_anchor=(1.07, 1.07),
+        bbox_to_anchor=(1.12, 1.08),
         frameon=False,
         fontsize=10,
     )
@@ -1008,7 +1008,7 @@ def generate_radar_chart_for_player(
 
     R_VALUE = 1.15  # keep default for all
     TOTAL_DISTANCE_VALUE_R = 1.08
-    TOTAL_DISTANCE_NAME_R = 1.12
+    TOTAL_DISTANCE_NAME_R = 1.15
     
     for lab, ang, val in zip(labels, angles, raw_vals):
         name, unit = _split_label_unit(lab)
@@ -1042,7 +1042,7 @@ def generate_radar_chart_for_player(
     ax.patch.set_facecolor((1, 1, 1, 0.5))    # circle background
 
     # Symmetric margins -> keeps the radar centered in the exported image
-    fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
+    fig.subplots_adjust(left=0.12, right=0.88, top=0.92, bottom=0.08)
     fig.savefig(out_png, transparent=False)
 
     plt.close(fig)
