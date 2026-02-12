@@ -950,6 +950,7 @@ def generate_radar_chart_for_player(
 
     fig = plt.figure(figsize=(7.8, 7.8), dpi=150)
     ax = plt.subplot(111, polar=True)
+    ax.set_aspect("equal", adjustable="box")
 
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
