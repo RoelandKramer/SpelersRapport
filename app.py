@@ -1264,10 +1264,10 @@ def fill_template_full(
         df_bench=df_bench,
         player_name=values.get("PLAYER_NAME") or player_name_ui,
         out_png=radar_png,
-        custom_maxes=None,  # <- IMPORTANT: disable custom maxes
+        custom_maxes=CUSTOM_MAXES,  # <- enable custom maxes
         team_name=values.get("CLUB_2024/2025") or values.get("CLUB_2023/2024") or None,
     )
-
+    
 
     # Performance chart: upload wins; else auto-generate like notebook
     perf_png: Optional[str] = None
