@@ -89,6 +89,37 @@ FC_DEN_BOSCH_PLAYERS = [
 
 SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
 
+def _is_toto_knvb_beker_nld(item: dict) -> bool:
+    """
+    Returns True if an API item represents the Dutch cup: 'TOTO KNVB beker (NLD)'.
+    Works across endpoints by checking common nested fields.
+    """
+    if not isinstance(item, dict):
+        return False
+
+    def _collect_strings(obj: Any, out: List[str]) -> None:
+        if obj is None:
+            return
+        if isinstance(obj, str):
+            out.append(obj)
+            return
+        if isinstance(obj, dict):
+            for v in obj.values():
+                _collect_strings(v, out)
+            return
+        if isinstance(obj, list):
+            for v in obj:
+                _collect_strings(v, out)
+
+    strings: List[str] = []
+    _collect_strings(item, strings)
+    blob = " ".join(s.lower() for s in strings if isinstance(s, str))
+
+    # Match both with/without parentheses, tolerate spacing/casing differences.
+    has_name = ("toto knvb beker" in blob) or ("knvb beker" in blob)
+    has_nld = ("(nld)" in blob) or (" nld" in blob) or ("countrycode nld" in blob) or ("alpha3code nld" in blob)
+    return bool(has_name and has_nld)
+  
 def normalize_season_label(name: str) -> str:
     """
     Normalize season strings to 'YYYY/YYYY' when possible.
@@ -349,17 +380,19 @@ def replace_tokens_in_shape(shape, values: Dict[str, str]) -> bool:
 
 def build_season_team_best_from_items(items: List[dict]) -> Dict[str, Dict[str, Any]]:
     """
-    Returns {season_label: {"team": team_name, "mins": minutes}} picking the row with max minutes.
-    Accepts items that have (season.name, team.name, stats.minutesPlayed or metrics.minutesPlayed).
+    Returns {season_label: {"team": team_name, "mins": minutes}} picking row with max minutes.
+    Skips Dutch cup: 'TOTO KNVB beker (NLD)'.
     """
     out: Dict[str, Dict[str, Any]] = {}
     for it in items or []:
+        if _is_toto_knvb_beker_nld(it):
+            continue
+
         sname = ((it.get("season") or {}).get("name") or "").strip()
         tname = ((it.get("team") or {}).get("name") or "").strip()
         if not sname or not tname:
             continue
 
-        # minutes might live under stats OR metrics depending on endpoint
         mins = safe_num(((it.get("stats") or {}).get("minutesPlayed")))
         mins = max(mins, safe_num(((it.get("metrics") or {}).get("minutesPlayed"))))
 
@@ -367,7 +400,6 @@ def build_season_team_best_from_items(items: List[dict]) -> Dict[str, Dict[str, 
         if prev is None or mins > safe_num(prev.get("mins")):
             out[sname] = {"team": tname, "mins": mins}
     return out
-
 
 def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str, str]:
     player = api_get_json(api_base, token, f"/api/v2/players/{player_id}")
@@ -542,18 +574,12 @@ def _find_stat(stats: dict, keys: List[str]) -> float:
             return safe_num(stats[lower[lk]])
     return 0.0
 
-
 def get_games_minutes_goals_assists_by_season(
     api_base: str,
     token: str,
     player_id: int,
     season_ids: List[int],
 ) -> Dict[int, Dict[str, int]]:
-    """
-    Returns {season_id: {"GAMES":..,"MINUTES":..,"GOALS":..,"ASSISTS":..}} for ALL given seasons.
-    Seasons with no items in both endpoints are omitted (treated as missing).
-    """
-    # --- Contribution ratings: games + minutes ---
     cr = api_get_json(
         api_base,
         token,
@@ -564,6 +590,8 @@ def get_games_minutes_goals_assists_by_season(
 
     gm_by_sid: Dict[int, Dict[str, int]] = {}
     for it in cr_items:
+        if _is_toto_knvb_beker_nld(it):
+            continue
         sid = (it.get("season") or {}).get("id")
         if not isinstance(sid, int):
             continue
@@ -572,7 +600,6 @@ def get_games_minutes_goals_assists_by_season(
         gm_by_sid[sid]["GAMES"] += int(round(safe_num(stats.get("matchesPlayed"))))
         gm_by_sid[sid]["MINUTES"] += int(round(safe_num(stats.get("minutesPlayed"))))
 
-    # --- Career stats: goals + assists ---
     cs = api_get_json(
         api_base,
         token,
@@ -583,12 +610,15 @@ def get_games_minutes_goals_assists_by_season(
 
     ga_by_sid: Dict[int, Dict[str, int]] = {}
     for it in cs_items:
+        if _is_toto_knvb_beker_nld(it):
+            continue
         sid = (it.get("season") or {}).get("id") or it.get("seasonId")
         if not isinstance(sid, int):
             continue
         stats = it.get("stats") or {}
         goals = int(round(_find_stat(stats, ["goal", "goals", "goalNonPenalty", "goal_non_penalty"])))
         assists = int(round(_find_stat(stats, ["assist", "assists"])))
+
         prev = ga_by_sid.get(sid)
         if prev is None:
             ga_by_sid[sid] = {"GOALS": goals, "ASSISTS": assists}
@@ -596,14 +626,10 @@ def get_games_minutes_goals_assists_by_season(
             ga_by_sid[sid]["GOALS"] = max(prev["GOALS"], goals)
             ga_by_sid[sid]["ASSISTS"] = max(prev["ASSISTS"], assists)
 
-    # --- Merge; omit seasons missing in BOTH sources ---
     out: Dict[int, Dict[str, int]] = {}
     for sid in season_ids:
-        has_gm = sid in gm_by_sid
-        has_ga = sid in ga_by_sid
-        if not (has_gm or has_ga):
+        if sid not in gm_by_sid and sid not in ga_by_sid:
             continue
-
         out[sid] = {
             "GAMES": int(gm_by_sid.get(sid, {}).get("GAMES", 0)),
             "MINUTES": int(gm_by_sid.get(sid, {}).get("MINUTES", 0)),
@@ -611,7 +637,6 @@ def get_games_minutes_goals_assists_by_season(
             "ASSISTS": int(ga_by_sid.get(sid, {}).get("ASSISTS", 0)),
         }
     return out
-
 
 def apply_season_row_tokens(
     values: Dict[str, str],
