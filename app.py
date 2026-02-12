@@ -375,11 +375,10 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     team = player.get("team") or {}
     contract = player.get("contract") or {}
 
-    # seasons
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
-    season_ids = pick_latest_season_ids(seasons_obj, n=5)  # bump to 5 to cover older seasons too
-    
-    # --- NEW: fallback mapping from career-stats (covers seasons without x-metrics) ---
+    season_ids = pick_latest_season_ids(seasons_obj, n=5)
+
+    # Build best team per season using fallbacks, then x-metrics override.
     cs_obj = api_get_json(
         api_base,
         token,
@@ -387,8 +386,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
     )
     season_team_best = build_season_team_best_from_items(items_of(cs_obj))
-    
-    # --- Optional: also merge contribution-ratings as additional fallback ---
+
     cr_obj = api_get_json(
         api_base,
         token,
@@ -397,8 +395,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     )
     for s, v in build_season_team_best_from_items(items_of(cr_obj)).items():
         season_team_best.setdefault(s, v)
-    
-    # --- Existing: x-metrics (use it to override when available / more precise) ---
+
     xmetrics_obj = api_get_json(
         api_base,
         token,
@@ -406,8 +403,15 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         params={"PlayerIds": player_id, "SeasonIds": season_ids, "P90": True, "Limit": 500},
     )
     for s, v in build_season_team_best_from_items(items_of(xmetrics_obj)).items():
-        season_team_best[s] = v  # override
+        season_team_best[s] = v  # override if present
 
+    # Normalize keys to "YYYY/YYYY" where possible so your CLUB_2024/2025 lookup works.
+    normalized_season_team_best: Dict[str, Dict[str, Any]] = {}
+    for raw_sname, payload in season_team_best.items():
+        norm = normalize_season_label(raw_sname) or str(raw_sname).strip()
+        if norm:
+            normalized_season_team_best[norm] = payload
+    season_team_best = normalized_season_team_best
 
     sciskill_obj = api_get_json(
         api_base,
@@ -429,27 +433,6 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     roles_sorted = sorted(roles, key=lambda rr: rr.get("fit") or 0, reverse=True)
     top_roles = ", ".join([rr.get("role") for rr in roles_sorted[:3] if rr.get("role")])
 
-
-    x_items = items_of(xmetrics_obj)
-
-    season_team_best: Dict[str, Dict[str, Any]] = {}
-    for it in x_items:
-        raw_sname = (it.get("season") or {}).get("name") or ""
-        sname = normalize_season_label(raw_sname) or str(raw_sname).strip()
-        tname = (it.get("team") or {}).get("name") or ""
-        mins = (it.get("metrics") or {}).get("minutesPlayed") or 0
-        if not sname or not tname:
-            continue
-        prev = season_team_best.get(sname)
-        if prev is None or mins > (prev.get("mins") or 0):
-            season_team_best[sname] = {"team": tname, "mins": mins}
-
-    values.update({
-      "CLUB_2024/2025": (season_team_best.get("2024/2025") or {}).get("team", ""),
-      "CLUB_2023/2024": (season_team_best.get("2023/2024") or {}).get("team", ""),
-      "CLUB_2022/2023": (season_team_best.get("2022/2023") or {}).get("team", ""),
-      })
-        
     nats = info.get("nationalities") or []
     nat_name = (nats[0].get("name") if nats else None) or (info.get("birthCountry") or {}).get("name") or ""
     nat_alpha3 = (nats[0].get("alpha3Code") if nats else None) or (info.get("birthCountry") or {}).get("alpha3Code") or ""
@@ -488,21 +471,47 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         "POTENTIAL_DEV_6M": str(sc.get("potentialDevelopmentSixMonths", "")).strip(),
         "TOP_ROLES": top_roles,
         "PRIMARY_ROLE_POSITION": prettify_camel(primary_role_row.get("position") or ""),
+        "ABB_NATIONALITY": abb_nat,
+
+        # Clubs (now includes 22/23)
         "CLUB_2024/2025": (season_team_best.get("2024/2025") or {}).get("team", ""),
         "CLUB_2023/2024": (season_team_best.get("2023/2024") or {}).get("team", ""),
-        "ABB_NATIONALITY": abb_nat,
+        "CLUB_2022/2023": (season_team_best.get("2022/2023") or {}).get("team", ""),
+
         "IMAGE": "{IMAGE}",
         "PRESTATIES_FIGURE": "{PRESTATIES_FIGURE}",
-        "_POSITIONS_ORDERED": pos_list,   # ✅ put it here
-
+        "_POSITIONS_ORDERED": pos_list,
     }
 
     values["_PLAYER_IMAGE_URL"] = info.get("imageUrl") or ""
     values["_TEAM_IMAGE_URL"] = team.get("imageUrl") or ""
     return values
 
-from typing import Any, Dict, List, Optional, Tuple
+def apply_season_row_tokens_blank_if_missing(
+    values: Dict[str, str],
+    season_label: str,
+    season_id_by_label: Dict[str, int],
+    stats_by_sid: Dict[int, Dict[str, int]],
+    club_key: str,
+    g_key: str,
+    m_key: str,
+    go_key: str,
+    a_key: str,
+) -> None:
+    sid = season_id_by_label.get(season_label)
+    stats = stats_by_sid.get(sid) if isinstance(sid, int) else None
+    if not sid or stats is None:
+        values[club_key] = ""
+        values[g_key] = ""
+        values[m_key] = ""
+        values[go_key] = ""
+        values[a_key] = ""
+        return
 
+    values[g_key] = str(stats["GAMES"])
+    values[m_key] = str(stats["MINUTES"])
+    values[go_key] = str(stats["GOALS"])
+    values[a_key] = str(stats["ASSISTS"])
 
 def _normalize_season_name(name: str) -> str:
     return normalize_season_label(name) if "normalize_season_label" in globals() else str(name).strip()
