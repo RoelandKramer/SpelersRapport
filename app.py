@@ -873,7 +873,7 @@ def generate_radar_chart_for_player(
     legend_labels = ["Player"]
     if kkd_line is not None:
         handles.append(kkd_line)
-        legend_labels.append("KKD avg (same pos group)")
+        legend_labels.append("KKD avg (same position)")
     ax.legend(
         handles,
         legend_labels,
