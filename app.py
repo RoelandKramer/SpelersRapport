@@ -1035,11 +1035,6 @@ def generate_radar_chart_for_player(
         ax.text(ang, r_value, val_line, fontsize=13, fontweight="bold", ha=ha, va="center")
 
 
-        R_NAME = NAME_R_MULT.get(lab, DEFAULT_NAME_R)
-        ax.text(ang, R_NAME, name, fontsize=13, fontweight="bold", ha=ha, va="center")
-        val_line = f"{val:.0f}" if unit == "" else f"{val:.0f} {unit}"
-        ax.text(ang, R_VALUE, val_line, fontsize=13, fontweight="bold", ha=ha, va="center")
-
     # --- FINAL PLOT STYLING (KEEP YOUR 50% TRANSPARENCY LOGIC) ---
     ax.spines["polar"].set_visible(False)
 
@@ -1047,7 +1042,7 @@ def generate_radar_chart_for_player(
     ax.patch.set_facecolor((1, 1, 1, 0.5))    # circle background
 
     # Symmetric margins -> keeps the radar centered in the exported image
-    fig.subplots_adjust(left=0.08, right=0.92, top=0.92, bottom=0.08)
+    fig.subplots_adjust(left=0.12, right=0.88, top=0.88, bottom=0.12)
     fig.savefig(out_png, transparent=False)
 
     plt.close(fig)
