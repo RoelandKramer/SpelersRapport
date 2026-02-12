@@ -762,10 +762,24 @@ def generate_radar_chart_for_player(
 ) -> Dict[str, float]:
     """
     Generates the radar chart PNG with 50% background transparency.
+
+    Add-ons:
+    - Orange dashed line (no fill): KKD average within same position_group (fallback: all KKD).
+    - Legend.
+    - Maxes: per metric = highest KKD player value, rounded up to nearest 100 (unless custom_maxes provided).
     """
+    def _ceil_to_100(x: float) -> float:
+        if not np.isfinite(x) or x <= 0:
+            return 100.0
+        return float(int(math.ceil(x / 100.0) * 100))
+
     row = pick_player_row_by_name(df_bench, player_name=player_name, team_name=team_name)
 
     labels = list(RADAR_METRICS_MAP.keys())
+
+    # -------------------------
+    # Player raw values
+    # -------------------------
     raw_vals = []
     for lab in labels:
         col = RADAR_METRICS_MAP[lab]
@@ -775,13 +789,60 @@ def generate_radar_chart_for_player(
         raw_vals.append(v)
     raw_vals = np.array(raw_vals, dtype=float)
 
-    maxes_dict = _compute_maxes(df_bench, row, labels, custom_maxes)
-    max_vals = np.array([maxes_dict[lab] for lab in labels], dtype=float)
-    max_vals = np.where(max_vals <= 0, 1.0, max_vals)
+    # -------------------------
+    # Maxes (KKD max rounded to 100)
+    # -------------------------
+    if custom_maxes:
+        maxes_dict = {lab: float(custom_maxes[lab]) for lab in labels}
+    else:
+        if "division" not in df_bench.columns:
+            raise ValueError("df_bench must contain a 'division' column to compute KKD-based maxes.")
+        kkd_df_all = df_bench[df_bench["division"].astype(str) == "KKD"]
+        if len(kkd_df_all) == 0:
+            raise ValueError("No rows found where df_bench['division'] == 'KKD' for KKD-based maxes.")
 
+        maxes_dict = {}
+        for lab in labels:
+            col = RADAR_METRICS_MAP[lab]
+            s = pd.to_numeric(kkd_df_all[col], errors="coerce").dropna() if col in kkd_df_all.columns else pd.Series([], dtype=float)
+            mx = float(s.max()) if len(s) else 0.0
+            maxes_dict[lab] = _ceil_to_100(mx)
+
+    max_vals = np.array([maxes_dict[lab] for lab in labels], dtype=float)
+    max_vals = np.where(max_vals <= 0, 100.0, max_vals)
+
+    # -------------------------
+    # Normalized player values
+    # -------------------------
     norm = np.clip(raw_vals / max_vals, 0.0, 1.0)
     norm_closed = np.r_[norm, norm[0]]
 
+    # -------------------------
+    # KKD average (same position_group; fallback: all KKD)
+    # -------------------------
+    kkd_norm_closed = None
+    if "division" in df_bench.columns:
+        kkd_df = df_bench[df_bench["division"].astype(str) == "KKD"]
+
+        if "position_group" in df_bench.columns and pd.notna(row.get("position_group")):
+            kkd_pg = kkd_df[kkd_df["position_group"] == row["position_group"]]
+            if len(kkd_pg) > 0:
+                kkd_df = kkd_pg
+
+        if len(kkd_df) > 0:
+            kkd_avg_vals = []
+            for lab in labels:
+                col = RADAR_METRICS_MAP[lab]
+                s = pd.to_numeric(kkd_df[col], errors="coerce").dropna() if col in kkd_df.columns else pd.Series([], dtype=float)
+                kkd_avg_vals.append(float(s.mean()) if len(s) else 0.0)
+
+            kkd_avg_vals = np.array(kkd_avg_vals, dtype=float)
+            kkd_norm = np.clip(kkd_avg_vals / max_vals, 0.0, 1.0)
+            kkd_norm_closed = np.r_[kkd_norm, kkd_norm[0]]
+
+    # -------------------------
+    # Plot geometry
+    # -------------------------
     N = len(labels)
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False)
     angles_closed = np.r_[angles, angles[0]]
@@ -792,9 +853,39 @@ def generate_radar_chart_for_player(
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
 
-    ax.plot(angles_closed, norm_closed, linewidth=3, marker="o", markersize=6)
+    # Player polygon
+    player_line, = ax.plot(angles_closed, norm_closed, linewidth=3, marker="o", markersize=6)
     ax.fill(angles_closed, norm_closed, alpha=0.20)
 
+    # KKD dashed overlay (no fill)
+    kkd_line = None
+    if kkd_norm_closed is not None:
+        kkd_line, = ax.plot(
+            angles_closed,
+            kkd_norm_closed,
+            linewidth=2.5,
+            linestyle="--",
+            color="orange",
+        )
+
+    # Legend
+    handles = [player_line]
+    legend_labels = ["Player"]
+    if kkd_line is not None:
+        handles.append(kkd_line)
+        legend_labels.append("KKD avg (same pos group)")
+    ax.legend(
+        handles,
+        legend_labels,
+        loc="upper right",
+        bbox_to_anchor=(1.18, 1.15),
+        frameon=False,
+        fontsize=10,
+    )
+
+    # -------------------------
+    # Rings / labels
+    # -------------------------
     rings = [0.25, 0.50, 0.75, 1.00]
     ax.set_ylim(0, 1.0)
     ax.set_yticks(rings)
@@ -830,24 +921,18 @@ def generate_radar_chart_for_player(
         val_line = f"{val:.0f}" if unit == "" else f"{val:.0f} {unit}"
         ax.text(ang, R_VALUE, val_line, fontsize=13, fontweight="bold", ha=ha, va="center")
 
-    # --- FINAL PLOT STYLING (UPDATED FOR 50% TRANSPARENCY) ---
-    # --- FINAL PLOT STYLING: whole image white @ 50% + circle white @ 50% ---
+    # --- FINAL PLOT STYLING (KEEP YOUR 50% TRANSPARENCY LOGIC) ---
     ax.spines["polar"].set_visible(False)
-    
-    # Rectangle background (outside the radar circle)
-    fig.patch.set_facecolor((1, 1, 1, 0.5))   # white, 50% alpha
-    
-    # Circle background (inside the polar axes)
-    ax.patch.set_facecolor((1, 1, 1, 0.5))    # white, 50% alpha
-    
+
+    fig.patch.set_facecolor((1, 1, 1, 0.5))   # rectangle background
+    ax.patch.set_facecolor((1, 1, 1, 0.5))    # circle background
+
     plt.tight_layout()
-    
-    # IMPORTANT: transparent=False, otherwise alpha gets overridden
     fig.savefig(out_png, bbox_inches="tight", transparent=False)
     plt.close(fig)
 
-
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
+
 
 def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[str]:
     if not player_name or not os.path.isdir(photos_dir):
