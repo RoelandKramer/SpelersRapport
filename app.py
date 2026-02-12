@@ -473,11 +473,12 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
         "PRIMARY_ROLE_POSITION": prettify_camel(primary_role_row.get("position") or ""),
         "ABB_NATIONALITY": abb_nat,
 
-        # Clubs (now includes 22/23)
+        # Clubs (now includes 25/26 + 22/23)
+        "CLUB_2025/2026": (season_team_best.get("2025/2026") or {}).get("team", ""),
         "CLUB_2024/2025": (season_team_best.get("2024/2025") or {}).get("team", ""),
         "CLUB_2023/2024": (season_team_best.get("2023/2024") or {}).get("team", ""),
         "CLUB_2022/2023": (season_team_best.get("2022/2023") or {}).get("team", ""),
-
+      
         "IMAGE": "{IMAGE}",
         "PRESTATIES_FIGURE": "{PRESTATIES_FIGURE}",
         "_POSITIONS_ORDERED": pos_list,
