@@ -899,21 +899,57 @@ def generate_radar_chart_for_player(
     # -------------------------
     # Maxes (AVERAGE of all players, rounded to a whole number)
     # -------------------------
-    if custom_maxes:
-        maxes_dict = {lab: float(custom_maxes[lab]) for lab in labels}
-    else:
-        maxes_dict = {}
-        for lab in labels:
-            col = RADAR_METRICS_MAP[lab]
-            if col not in df_bench.columns:
-                maxes_dict[lab] = 1.0
-                continue
+    # -------------------------
+    # Maxes = highest PLAYER average per metric
+    # using only matches where minutes >= 80
+    # -------------------------
+    def _pick_minutes_col(df: pd.DataFrame) -> str:
+        for c in ("minutesPlayed", "minutes_played", "minutes", "mins", "min"):
+            if c in df.columns:
+                return c
+        raise ValueError(
+            "To compute maxes from 80+ minute matches, df_bench must contain a minutes column "
+            "(e.g. minutesPlayed / minutes)."
+        )
 
-            s = pd.to_numeric(df_bench[col], errors="coerce").dropna()
-            avg = float(s.mean()) if len(s) else 0.0
+    def _pick_player_col(df: pd.DataFrame) -> str:
+        for c in ("player", "player_name", "name"):
+            if c in df.columns:
+                return c
+        raise ValueError("df_bench must contain a player column (e.g. 'player').")
 
-            # round to full number, keep >0 so division doesn't blow up
-            maxes_dict[lab] = max(1.0, float(int(round(avg))))
+    player_col = _pick_player_col(df_bench)
+    minutes_col = _pick_minutes_col(df_bench)
+
+    # Optional: keep KKD-only like your old logic (uncomment if you want)
+    # if "division" in df_bench.columns:
+    #     df_bench = df_bench[df_bench["division"].astype(str) == "KKD"]
+
+    eligible = df_bench.copy()
+    eligible["_mins"] = pd.to_numeric(eligible[minutes_col], errors="coerce")
+    eligible = eligible[eligible["_mins"] >= 80]
+
+    if len(eligible) == 0:
+        raise ValueError("No rows found with minutes >= 80. Cannot compute maxes.")
+
+    maxes_dict: Dict[str, float] = {}
+    for lab in labels:
+        col = RADAR_METRICS_MAP[lab]
+        if col not in eligible.columns:
+            maxes_dict[lab] = 1.0
+            continue
+
+        eligible["_metric"] = pd.to_numeric(eligible[col], errors="coerce")
+        per_player_avg = (
+            eligible.dropna(subset=["_metric"])
+                    .groupby(player_col)["_metric"]
+                    .mean()
+        )
+
+        if len(per_player_avg) == 0:
+            maxes_dict[lab] = 1.0
+        else:
+            maxes_dict[lab] = float(int(round(per_player_avg.max())))
 
     max_vals = np.array([maxes_dict[lab] for lab in labels], dtype=float)
     max_vals = np.where(max_vals <= 0, 100.0, max_vals)
@@ -1270,9 +1306,10 @@ def fill_template_full(
         df_bench=df_bench,
         player_name=values.get("PLAYER_NAME") or player_name_ui,
         out_png=radar_png,
-        custom_maxes=CUSTOM_MAXES,
+        custom_maxes=None,  # <- IMPORTANT: disable custom maxes
         team_name=values.get("CLUB_2024/2025") or values.get("CLUB_2023/2024") or None,
     )
+
 
     # Performance chart: upload wins; else auto-generate like notebook
     perf_png: Optional[str] = None
