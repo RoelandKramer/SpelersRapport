@@ -893,21 +893,27 @@ def generate_radar_chart_for_player(
     # -------------------------
     # Maxes (KKD max rounded to 100)
     # -------------------------
+    # -------------------------
+    # Maxes (KKD max rounded to 100)
+    # -------------------------
+    # -------------------------
+    # Maxes (AVERAGE of all players, rounded to a whole number)
+    # -------------------------
     if custom_maxes:
         maxes_dict = {lab: float(custom_maxes[lab]) for lab in labels}
     else:
-        if "division" not in df_bench.columns:
-            raise ValueError("df_bench must contain a 'division' column to compute KKD-based maxes.")
-        kkd_df_all = df_bench[df_bench["division"].astype(str) == "KKD"]
-        if len(kkd_df_all) == 0:
-            raise ValueError("No rows found where df_bench['division'] == 'KKD' for KKD-based maxes.")
-
         maxes_dict = {}
         for lab in labels:
             col = RADAR_METRICS_MAP[lab]
-            s = pd.to_numeric(kkd_df_all[col], errors="coerce").dropna() if col in kkd_df_all.columns else pd.Series([], dtype=float)
-            mx = float(s.max()) if len(s) else 0.0
-            maxes_dict[lab] = _ceil_to_100(mx)
+            if col not in df_bench.columns:
+                maxes_dict[lab] = 1.0
+                continue
+
+            s = pd.to_numeric(df_bench[col], errors="coerce").dropna()
+            avg = float(s.mean()) if len(s) else 0.0
+
+            # round to full number, keep >0 so division doesn't blow up
+            maxes_dict[lab] = max(1.0, float(int(round(avg))))
 
     max_vals = np.array([maxes_dict[lab] for lab in labels], dtype=float)
     max_vals = np.where(max_vals <= 0, 100.0, max_vals)
