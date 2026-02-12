@@ -156,13 +156,13 @@ RADAR_METRICS_MAP: Dict[str, str] = {
     "Sprint runs": "sprint_runs",
 }
 
-CUSTOM_MAXES: Dict[str, float] = {
-    "Total distance (m)": 15000,
-    "HI distance (m)": 1500,
-    "Sprint distance (m)": 500,
-    "HI runs": 75,
-    "Sprint runs": 30,
-}
+# CUSTOM_MAXES: Dict[str, float] = {
+#     "Total distance (m)": 15000,
+#     "HI distance (m)": 1500,
+#     "Sprint distance (m)": 500,
+#     "HI runs": 75,
+#     "Sprint runs": 30,
+# }
 
 NAME_R_MULT = {
     "Total distance (m)": 1.22,
