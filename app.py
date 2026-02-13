@@ -651,6 +651,55 @@ def get_teamwise_stats_by_season(
 
     return out
 
+def get_career_stats_totals_by_season_team(
+    api_base: str,
+    token: str,
+    player_id: int,
+    season_ids: List[int],
+) -> Dict[int, Dict[str, Dict[str, int]]]:
+    """
+    Returns: {season_id: {team_name: {"GAMES","MINUTES","GOALS","ASSISTS"}}}
+
+    Uses SciSports metrics endpoints and SUMS across all competitions for the same season+team.
+    This is the API equivalent of selecting "Total" on the career-stats page.
+    """
+    cs = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/career-stats/players",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 1000},
+    )
+    items = items_of(cs)
+
+    out: Dict[int, Dict[str, Dict[str, int]]] = {}
+
+    def ensure(sid: int, team: str) -> Dict[str, int]:
+        out.setdefault(sid, {})
+        out[sid].setdefault(team, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
+        return out[sid][team]
+
+    for it in items:
+        sid = (it.get("season") or {}).get("id") or it.get("seasonId")
+        if not isinstance(sid, int) or sid not in season_ids:
+            continue
+
+        team_name = ((it.get("team") or {}).get("name") or "").strip() or "Unknown"
+        stats = it.get("stats") or {}
+
+        # career-stats often has different naming; we try multiple keys robustly.
+        games = int(round(_find_stat(stats, ["matchesPlayed", "matchPlayed", "matches", "games"])))
+        minutes = int(round(_find_stat(stats, ["minutesPlayed", "minutes"])))
+        goals = int(round(_find_stat(stats, ["goal", "goals", "goalNonPenalty", "goal_non_penalty"])))
+        assists = int(round(_find_stat(stats, ["assist", "assists"])))
+
+        bucket = ensure(sid, team_name)
+        bucket["GAMES"] += games
+        bucket["MINUTES"] += minutes
+        bucket["GOALS"] += goals
+        bucket["ASSISTS"] += assists
+
+    return out
+
 
 def get_games_minutes_goals_assists_by_season(
     api_base: str,
@@ -715,6 +764,37 @@ def get_games_minutes_goals_assists_by_season(
             "ASSISTS": int(ga_by_sid.get(sid, {}).get("ASSISTS", 0)),
         }
     return out
+def apply_season_row_tokens_teamwise(
+    values: Dict[str, str],
+    season_label: str,
+    season_id_by_label: Dict[str, int],
+    totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
+    club_key: str,
+    g_key: str,
+    m_key: str,
+    go_key: str,
+    a_key: str,
+) -> None:
+    sid = season_id_by_label.get(season_label)
+    teams = totals_by_sid.get(sid) if isinstance(sid, int) else None
+
+    if not sid or not teams:
+        values[club_key] = ""
+        values[g_key] = ""
+        values[m_key] = ""
+        values[go_key] = ""
+        values[a_key] = ""
+        return
+
+    # Sort by minutes desc so primary club appears first
+    ordered = sorted(teams.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
+    sep = " / " if len(ordered) > 1 else ""
+
+    values[club_key] = sep.join([team for team, _ in ordered])
+    values[g_key] = sep.join([str(st["GAMES"]) for _, st in ordered])
+    values[m_key] = sep.join([str(st["MINUTES"]) for _, st in ordered])
+    values[go_key] = sep.join([str(st["GOALS"]) for _, st in ordered])
+    values[a_key] = sep.join([str(st["ASSISTS"]) for _, st in ordered])
 
 def apply_season_row_tokens(
     values: Dict[str, str],
@@ -1302,47 +1382,49 @@ def fill_template_full(
     prs = Presentation(template_path)
 
     # Build values (old logic)
-
-    # Seasons + latest
+    # Seasons (keep what you already have)
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
     season_ids_latest5 = pick_latest_season_ids(seasons_obj, n=5)
     season_id_by_label = build_season_id_by_label(seasons_obj)
     
+    # Only seasons that should use career-stats totals
     target_labels = ["2025/2026", "2024/2025"]
     target_season_ids = [season_id_by_label[lbl] for lbl in target_labels if lbl in season_id_by_label]
     
-    # NEW: team-wise + competition-summed stats
-    teamwise_by_sid = get_teamwise_stats_by_season(
+    totals_by_sid = get_career_stats_totals_by_season_team(
         api_base=api_base,
         token=token,
         player_id=player_id,
         season_ids=target_season_ids,
     )
-
+    
     apply_season_row_tokens_teamwise(
-      values=values,
-      season_label="2025/2026",
-      season_id_by_label=season_id_by_label,
-      teamwise_by_sid=teamwise_by_sid,
-      club_key="CLUB_2025/2026",
-      g_key="G25/26",
-      m_key="M25/26",
-      go_key="GO25/26",
-      a_key="A25/26",
-  )
-
+        values=values,
+        season_label="2025/2026",
+        season_id_by_label=season_id_by_label,
+        totals_by_sid=totals_by_sid,
+        club_key="CLUB_2025/2026",
+        g_key="G25/26",
+        m_key="M25/26",
+        go_key="GO25/26",
+        a_key="A25/26",
+    )
+    
     apply_season_row_tokens_teamwise(
         values=values,
         season_label="2024/2025",
         season_id_by_label=season_id_by_label,
-        teamwise_by_sid=teamwise_by_sid,
+        totals_by_sid=totals_by_sid,
         club_key="CLUB_2024/2025",
         g_key="G24/25",
         m_key="M24/25",
         go_key="GO24/25",
         a_key="A24/25",
     )
-        
+    
+    # For older seasons: club only (already set in build_personal_values via season_team_best)
+    # Do NOT override CLUB_2023/2024 and CLUB_2022/2023 here.
+
 
 
     # strengths_line, percentile = compute_strengths_and_percentile_from_api(
