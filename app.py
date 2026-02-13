@@ -229,7 +229,6 @@ CUSTOM_MAXES = {
     "Sprint runs": 25,
 }
 
-SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
 def _safe_int(x: Any) -> int:
     try:
         if x is None:
@@ -1863,7 +1862,13 @@ def fill_template_full(
     target_season_ids = []
     for lbl in SEASON_SLOTS:
         target_season_ids.extend(season_ids_by_label.get(lbl, []))
-    
+      
+    totals_by_sid = get_career_stats_totals_by_season_team(
+        api_base=api_base,
+        token=token,
+        player_id=player_id,
+        season_ids=target_season_ids,
+    )
     season_team_fallback = {
         "2025/2026": values.get("CLUB_2025/2026", ""),
         "2024/2025": values.get("CLUB_2024/2025", ""),
