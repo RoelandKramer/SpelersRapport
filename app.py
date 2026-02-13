@@ -1763,26 +1763,6 @@ def main() -> None:
     st.set_page_config(page_title="Player Report Generator", layout="wide")
     st.title("Player Report Generator (PPTX / PDF)")
 
-    st.divider()
-    st.subheader("Debug tools")
-    
-    if st.checkbox("Show SciSports season debug"):
-        season_label = st.selectbox("Season label to inspect", ["2025/2026", "2024/2025", "2023/2024", "2022/2023"])
-        seasons_obj = api_get_json(st.session_state["api_base"], st.session_state["access_token"],
-                                  "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
-        season_id_by_label = build_season_id_by_label(seasons_obj)
-        sid = season_id_by_label.get(season_label)
-    
-        if st.button("Run debug", type="secondary"):
-            if not sid:
-                st.error(f"No season id found for {season_label}")
-            else:
-                debug_season_rows(
-                    api_base=st.session_state["api_base"],
-                    token=st.session_state["access_token"],
-                    player_id=int(player_id),
-                    season_id=int(sid),
-                )
 
     # Session state
     st.session_state.setdefault("access_token", None)
@@ -1848,6 +1828,26 @@ def main() -> None:
             index=0,
         )
         player_id = next(p["player_id"] for p in FC_DEN_BOSCH_PLAYERS if p["name"] == player_label)
+        st.divider()
+        st.subheader("Debug tools")
+        
+        if st.checkbox("Show SciSports season debug"):
+            season_label = st.selectbox("Season label to inspect", ["2025/2026", "2024/2025", "2023/2024", "2022/2023"])
+            seasons_obj = api_get_json(st.session_state["api_base"], st.session_state["access_token"],
+                                      "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
+            season_id_by_label = build_season_id_by_label(seasons_obj)
+            sid = season_id_by_label.get(season_label)
+        
+            if st.button("Run debug", type="secondary"):
+                if not sid:
+                    st.error(f"No season id found for {season_label}")
+                else:
+                    debug_season_rows(
+                        api_base=st.session_state["api_base"],
+                        token=st.session_state["access_token"],
+                        player_id=int(player_id),
+                        season_id=int(sid),
+                    )
 
     with right:
         perf_file = st.file_uploader(
