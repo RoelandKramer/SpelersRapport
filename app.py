@@ -1511,21 +1511,20 @@ def insert_image_at_token_exact(slide, token: str, image_path: str) -> int:
         replaced += 1
     return replaced
 from pptx.dml.color import RGBColor
-
 POSITION_TO_NUMBER: Dict[str, int] = {
-    # GK
     "Goalkeeper": 1,
-
-    # Back line
     "RightBack": 2,
     "RightFullback": 2,
     "Right Back": 2,
-    "Centre Back": 4,
-    "CentreBack": 4,
+
+    # Your template LB is 5
     "LeftBack": 5,
     "Left Back": 5,
 
-    # Midfield (common API variants)
+    # CB handled dynamically (3 vs 4)
+    "Centre Back": -1,
+    "CentreBack": -1,
+
     "DefensiveMidfield": 6,
     "Defensive Midfield": 6,
     "CentreMidfield": 8,
@@ -1533,15 +1532,28 @@ POSITION_TO_NUMBER: Dict[str, int] = {
     "AttackingMidfield": 10,
     "Attacking Midfield": 10,
 
-    # Wings / forwards
     "RightWing": 7,
     "Right Wing": 7,
     "Left Wing": 11,
     "LeftWing": 11,
+
     "Striker": 9,
     "CentreForward": 9,
     "Centre Forward": 9,
 }
+
+def _resolve_position_number(position: str, preferred_foot: str) -> Optional[int]:
+    """
+    Returns the shirt/formation number for a position, with special logic for CentreBack:
+      - right-footed -> 3
+      - left-footed  -> 4
+    """
+    if position in ("CentreBack", "Centre Back"):
+        pf = (preferred_foot or "").strip().lower()
+        # Treat anything starting with 'l' as left, else right
+        return 4 if pf.startswith("l") else 3
+
+    return POSITION_TO_NUMBER.get(position)
 
 
 MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
@@ -1736,8 +1748,11 @@ def fill_template_full(
             if replace_tokens_in_shape(shape, values):
                 inserted["text_shapes_changed"] += 1
         
-        apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
-        
+        apply_position_coloring(
+            slide,
+            values.get("_POSITIONS_ORDERED", []),
+            values.get("PREFERRED_FOOT", ""),
+        )        
 
     prs.save(out_pptx_path)
 
