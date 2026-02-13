@@ -89,6 +89,116 @@ FC_DEN_BOSCH_PLAYERS = [
     {"name": "Luc van Koeverden", "player_id": 673690},
 ]
 
+SEASON_SLOTS = ["2025/2026", "2024/2025", "2023/2024", "2022/2023"]
+
+def _suffix_for_season_label(label: str) -> str:
+    # "2024/2025" -> "24/25"
+    y1, y2 = label.split("/")
+    return f"{y1[-2:]}/{y2[-2:]}"
+
+def build_rows_with_spill(
+    *,
+    season_slots: List[str],
+    season_ids_by_label: Dict[str, List[int]],
+    totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
+    max_rows: int = 4,
+) -> List[Dict[str, Any]]:
+    """
+    Returns up to max_rows rows, where each season can contribute 1+ team-rows.
+    Each row: {"season": "2024/2025", "team": "...", "GAMES":..,"MINUTES":..,"GOALS":..,"ASSISTS":..}
+    """
+    rows: List[Dict[str, Any]] = []
+
+    for season_label in season_slots:
+        sids = season_ids_by_label.get(season_label) or []
+        if not sids:
+            continue
+
+        # merge all competition-season-IDs for that label
+        merged: Dict[str, Dict[str, int]] = {}
+        for sid in sids:
+            for team_name, st in (totals_by_sid.get(sid) or {}).items():
+                b = merged.setdefault(team_name, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
+                b["GAMES"] += int(st.get("GAMES", 0))
+                b["MINUTES"] += int(st.get("MINUTES", 0))
+                b["GOALS"] += int(st.get("GOALS", 0))
+                b["ASSISTS"] += int(st.get("ASSISTS", 0))
+
+        if not merged:
+            continue
+
+        # order teams by minutes (primary team first)
+        ordered = sorted(merged.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
+
+        for team_name, st in ordered:
+            rows.append(
+                {
+                    "season": season_label,
+                    "team": team_name,
+                    "GAMES": int(st.get("GAMES", 0)),
+                    "MINUTES": int(st.get("MINUTES", 0)),
+                    "GOALS": int(st.get("GOALS", 0)),
+                    "ASSISTS": int(st.get("ASSISTS", 0)),
+                }
+            )
+            if len(rows) >= max_rows:
+                return rows
+
+    return rows
+
+
+def apply_spilled_rows_to_template_slots(values: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
+    """
+    Map rows[0..3] onto fixed template slots:
+      row0 -> tokens for 2025/2026
+      row1 -> tokens for 2024/2025
+      row2 -> tokens for 2023/2024
+      row3 -> tokens for 2022/2023
+    YEAR_* is filled from the row's season label (so it can repeat for split seasons).
+    """
+    for i, slot_label in enumerate(SEASON_SLOTS):
+        suffix = _suffix_for_season_label(slot_label)
+
+        club_key = f"CLUB_{slot_label}"
+        year_key = f"YEAR_{slot_label}"
+
+        g_key = f"G{suffix}"
+        m_key = f"M{suffix}"
+        go_key = f"GO{suffix}"
+        a_key = f"A{suffix}"
+
+        if i >= len(rows):
+            values[club_key] = ""
+            values[year_key] = ""
+            values[g_key] = ""
+            values[m_key] = ""
+            values[go_key] = ""
+            values[a_key] = ""
+            continue
+
+        r = rows[i]
+        values[club_key] = r["team"]
+        values[year_key] = r["season"]  # <-- this is the crucial part for "same year on spill"
+        values[g_key] = str(r["GAMES"])
+        values[m_key] = str(r["MINUTES"])
+        values[go_key] = str(r["GOALS"])
+        values[a_key] = str(r["ASSISTS"])
+
+def _image_name_aliases(player_name: str) -> List[str]:
+    """
+    Return additional name variants that might exist as filenames.
+    Keep it conservative + explicit to avoid wrong matches.
+    """
+    n = (player_name or "").strip()
+
+    aliases = []
+
+    # Explicit one-off alias
+    if n.lower() == "emian-johar semedo":
+        aliases.append("Emian Semedo")
+
+    return aliases
+
 CUSTOM_MAXES = {
     "Total distance (m)": 13750,
     "HI distance (m)": 1650,
@@ -1465,28 +1575,34 @@ def generate_radar_chart_for_player(
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
 
-
 def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[str]:
     if not player_name or not os.path.isdir(photos_dir):
         return None
 
-    candidates = [
-        f"{player_name}.png",
-        f"{player_name}.jpg",
-        f"{player_name}.jpeg",
-        f"{player_name.strip()}.png",
-    ]
+    # Build candidate names: exact + aliases
+    base_names = [player_name] + _image_name_aliases(player_name)
+
+    # Try common extensions for each base name
+    candidates = []
+    for bn in base_names:
+        candidates.extend([
+            f"{bn}.png",
+            f"{bn}.jpg",
+            f"{bn}.jpeg",
+            f"{bn.strip()}.png",
+        ])
 
     for name in candidates:
         p = os.path.join(photos_dir, name)
         if os.path.exists(p):
             return p
 
-    # case-insensitive fallback
-    target_low = f"{player_name.lower().strip()}.png"
-    for f in os.listdir(photos_dir):
-        if f.lower() == target_low:
-            return os.path.join(photos_dir, f)
+    # case-insensitive fallback (png only, matches your original logic)
+    for bn in base_names:
+        target_low = f"{bn.lower().strip()}.png"
+        for f in os.listdir(photos_dir):
+            if f.lower() == target_low:
+                return os.path.join(photos_dir, f)
 
     return None
 
@@ -1637,14 +1753,12 @@ def fill_template_full(
     # Build values (old logic)
     # Seasons (keep what you already have)
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
-    season_ids_latest5 = pick_latest_season_ids(seasons_obj, n=5)
     season_ids_by_label = build_season_ids_by_label(seasons_obj)
     
-    target_labels = ["2025/2026", "2024/2025"]
+    # We need stats for all 4 slots because spill may push seasons down
     target_season_ids = []
-    for lbl in target_labels:
+    for lbl in SEASON_SLOTS:
         target_season_ids.extend(season_ids_by_label.get(lbl, []))
-
     
     totals_by_sid = get_career_stats_totals_by_season_team(
         api_base=api_base,
@@ -1653,29 +1767,39 @@ def fill_template_full(
         season_ids=target_season_ids,
     )
     
-    apply_season_row_tokens_teamwise(
-        values=values,
-        season_label="2025/2026",
+    rows = build_rows_with_spill(
+        season_slots=SEASON_SLOTS,
         season_ids_by_label=season_ids_by_label,
         totals_by_sid=totals_by_sid,
-        club_key="CLUB_2025/2026",
-        g_key="G25/26",
-        m_key="M25/26",
-        go_key="GO25/26",
-        a_key="A25/26",
+        max_rows=4,
     )
     
-    apply_season_row_tokens_teamwise(
-        values=values,
-        season_label="2024/2025",
-        season_ids_by_label=season_ids_by_label,
-        totals_by_sid=totals_by_sid,
-        club_key="CLUB_2024/2025",
-        g_key="G24/25",
-        m_key="M24/25",
-        go_key="GO24/25",
-        a_key="A24/25",
-    )
+    apply_spilled_rows_to_template_slots(values, rows)
+
+    
+    # apply_season_row_tokens_teamwise(
+    #     values=values,
+    #     season_label="2025/2026",
+    #     season_ids_by_label=season_ids_by_label,
+    #     totals_by_sid=totals_by_sid,
+    #     club_key="CLUB_2025/2026",
+    #     g_key="G25/26",
+    #     m_key="M25/26",
+    #     go_key="GO25/26",
+    #     a_key="A25/26",
+    # )
+    
+    # apply_season_row_tokens_teamwise(
+    #     values=values,
+    #     season_label="2024/2025",
+    #     season_ids_by_label=season_ids_by_label,
+    #     totals_by_sid=totals_by_sid,
+    #     club_key="CLUB_2024/2025",
+    #     g_key="G24/25",
+    #     m_key="M24/25",
+    #     go_key="GO24/25",
+    #     a_key="A24/25",
+    # )
 
     
     # For older seasons: club only (already set in build_personal_values via season_team_best)
