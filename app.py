@@ -96,6 +96,189 @@ CUSTOM_MAXES = {
 }
 
 SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b")
+def _safe_int(x: Any) -> int:
+    try:
+        if x is None:
+            return 0
+        return int(round(float(x)))
+    except Exception:
+        return 0
+
+
+def _keys_preview(d: Any, max_keys: int = 25) -> str:
+    if not isinstance(d, dict):
+        return ""
+    ks = list(d.keys())
+    ks_sorted = sorted([str(k) for k in ks])[:max_keys]
+    suffix = " ..." if len(ks) > max_keys else ""
+    return ", ".join(ks_sorted) + suffix
+
+
+def _get_team_name(it: dict) -> str:
+    return ((it.get("team") or {}).get("name") or "").strip() or "Unknown"
+
+
+def _get_comp_name(it: dict) -> str:
+    # Competition naming differs per endpoint. This tries common patterns.
+    comp = it.get("competition") or it.get("tournament") or it.get("league") or {}
+    name = ""
+    if isinstance(comp, dict):
+        name = (comp.get("name") or "").strip()
+    if not name:
+        # last resort: scan nested strings for something that looks like a comp name
+        for k in ["competitionName", "tournamentName", "leagueName", "name"]:
+            v = it.get(k)
+            if isinstance(v, str) and v.strip():
+                name = v.strip()
+                break
+    return name or ""
+
+
+def _pick_value_source(it: dict, stat_keys: List[str], metric_keys: List[str]) -> Tuple[int, str, str]:
+    """
+    Returns (value, source, key_used)
+    source in {"stats","metrics","other","missing"}
+    """
+    stats = it.get("stats") or {}
+    metrics = it.get("metrics") or {}
+
+    # try stats
+    if isinstance(stats, dict):
+        for k in stat_keys:
+            if k in stats and stats.get(k) is not None:
+                return _safe_int(stats.get(k)), "stats", k
+
+    # try metrics
+    if isinstance(metrics, dict):
+        for k in metric_keys:
+            if k in metrics and metrics.get(k) is not None:
+                return _safe_int(metrics.get(k)), "metrics", k
+
+    # case-insensitive search (sometimes keys differ in casing)
+    if isinstance(stats, dict):
+        low = {str(k).lower(): k for k in stats.keys()}
+        for k in stat_keys:
+            lk = k.lower()
+            if lk in low and stats.get(low[lk]) is not None:
+                return _safe_int(stats.get(low[lk])), "stats", str(low[lk])
+
+    if isinstance(metrics, dict):
+        low = {str(k).lower(): k for k in metrics.keys()}
+        for k in metric_keys:
+            lk = k.lower()
+            if lk in low and metrics.get(low[lk]) is not None:
+                return _safe_int(metrics.get(low[lk])), "metrics", str(low[lk])
+
+    # maybe on top-level
+    for k in stat_keys + metric_keys:
+        if k in it and it.get(k) is not None:
+            return _safe_int(it.get(k)), "other", k
+
+    return 0, "missing", ""
+
+
+def debug_season_rows(api_base: str, token: str, player_id: int, season_id: int) -> None:
+    """
+    Prints a row-by-row inspection for BOTH endpoints you use:
+      - contribution-ratings (games/minutes usually)
+      - career-stats (goals/assists usually; sometimes games/minutes too)
+    Shows where each value is coming from (stats vs metrics).
+    """
+    import pandas as pd
+    import streamlit as st
+
+    st.subheader(f"DEBUG: player={player_id} season_id={season_id}")
+
+    endpoints = [
+        ("contribution-ratings", "/api/v2/metrics/players/contribution-ratings"),
+        ("career-stats", "/api/v2/metrics/career-stats/players"),
+    ]
+
+    for label, path in endpoints:
+        st.markdown(f"### Endpoint: `{label}`")
+
+        obj = api_get_json(
+            api_base,
+            token,
+            path,
+            params={"PlayerIds": player_id, "SeasonIds": [season_id], "Limit": 2000},
+        )
+        items = items_of(obj)
+
+        rows = []
+        for it in items:
+            team = _get_team_name(it)
+            comp = _get_comp_name(it)
+
+            # Try to detect values and their sources
+            games, games_src, games_key = _pick_value_source(
+                it,
+                stat_keys=["matchesPlayed", "matchPlayed", "matches", "games"],
+                metric_keys=["matchesPlayed", "matchPlayed", "matches", "games"],
+            )
+            minutes, min_src, min_key = _pick_value_source(
+                it,
+                stat_keys=["minutesPlayed", "minutes"],
+                metric_keys=["minutesPlayed", "minutes"],
+            )
+            goals, goal_src, goal_key = _pick_value_source(
+                it,
+                stat_keys=["goal", "goals", "goalNonPenalty", "goal_non_penalty"],
+                metric_keys=["goal", "goals", "goalNonPenalty", "goal_non_penalty"],
+            )
+            assists, ast_src, ast_key = _pick_value_source(
+                it,
+                stat_keys=["assist", "assists"],
+                metric_keys=["assist", "assists"],
+            )
+
+            rows.append(
+                {
+                    "team": team,
+                    "competition": comp,
+                    "games": games,
+                    "games_src": games_src,
+                    "games_key": games_key,
+                    "minutes": minutes,
+                    "minutes_src": min_src,
+                    "minutes_key": min_key,
+                    "goals": goals,
+                    "goals_src": goal_src,
+                    "goals_key": goal_key,
+                    "assists": assists,
+                    "assists_src": ast_src,
+                    "assists_key": ast_key,
+                    "stats_keys": _keys_preview(it.get("stats") or {}),
+                    "metrics_keys": _keys_preview(it.get("metrics") or {}),
+                }
+            )
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            st.warning("No items returned for this season.")
+            continue
+
+        # Helpful grouping to see if league rows exist but are zeros
+        st.write("Rows (raw):")
+        st.dataframe(df, use_container_width=True)
+
+        st.write("Grouped sum by team + competition (so you can see which comps exist):")
+        grouped = (
+            df.groupby(["team", "competition"], dropna=False)[["games", "minutes", "goals", "assists"]]
+            .sum()
+            .reset_index()
+            .sort_values(["team", "competition"])
+        )
+        st.dataframe(grouped, use_container_width=True)
+
+        st.write("Count by source (where values are coming from):")
+        src_counts = {
+            "games": df["games_src"].value_counts().to_dict(),
+            "minutes": df["minutes_src"].value_counts().to_dict(),
+            "goals": df["goals_src"].value_counts().to_dict(),
+            "assists": df["assists_src"].value_counts().to_dict(),
+        }
+        st.json(src_counts)
 
 def _is_toto_knvb_beker_nld(item: dict) -> bool:
     """
@@ -1579,6 +1762,27 @@ def convert_pptx_to_pdf(pptx_path: str, out_dir: str) -> str:
 def main() -> None:
     st.set_page_config(page_title="Player Report Generator", layout="wide")
     st.title("Player Report Generator (PPTX / PDF)")
+
+    st.divider()
+    st.subheader("Debug tools")
+    
+    if st.checkbox("Show SciSports season debug"):
+        season_label = st.selectbox("Season label to inspect", ["2025/2026", "2024/2025", "2023/2024", "2022/2023"])
+        seasons_obj = api_get_json(st.session_state["api_base"], st.session_state["access_token"],
+                                  "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
+        season_id_by_label = build_season_id_by_label(seasons_obj)
+        sid = season_id_by_label.get(season_label)
+    
+        if st.button("Run debug", type="secondary"):
+            if not sid:
+                st.error(f"No season id found for {season_label}")
+            else:
+                debug_season_rows(
+                    api_base=st.session_state["api_base"],
+                    token=st.session_state["access_token"],
+                    player_id=int(player_id),
+                    season_id=int(sid),
+                )
 
     # Session state
     st.session_state.setdefault("access_token", None)
