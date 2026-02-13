@@ -582,6 +582,76 @@ def _find_stat(stats: dict, keys: List[str]) -> float:
             return safe_num(stats[lower[lk]])
     return 0.0
 
+def get_teamwise_stats_by_season(
+    api_base: str,
+    token: str,
+    player_id: int,
+    season_ids: List[int],
+) -> Dict[int, Dict[str, Dict[str, int]]]:
+    """
+    Returns:
+      { season_id: { team_name: {"GAMES":..,"MINUTES":..,"GOALS":..,"ASSISTS":..} } }
+
+    Rule:
+    - Sums across ALL competitions within a season.
+    - Aggregates separately per team.
+    - No KNVB-beker filtering here (you asked to include all competitions).
+    """
+    # Games + minutes from contribution-ratings
+    cr = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/players/contribution-ratings",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
+    )
+    cr_items = cr.get("items") or []
+
+    out: Dict[int, Dict[str, Dict[str, int]]] = {}
+
+    def _ensure(sid: int, team: str) -> Dict[str, int]:
+        out.setdefault(sid, {})
+        out[sid].setdefault(team, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
+        return out[sid][team]
+
+    for it in cr_items:
+        sid = (it.get("season") or {}).get("id")
+        if not isinstance(sid, int) or sid not in season_ids:
+            continue
+
+        team_name = ((it.get("team") or {}).get("name") or "").strip() or "Unknown"
+        stats = it.get("stats") or {}
+
+        bucket = _ensure(sid, team_name)
+        bucket["GAMES"] += int(round(safe_num(stats.get("matchesPlayed"))))
+        bucket["MINUTES"] += int(round(safe_num(stats.get("minutesPlayed"))))
+
+    # Goals + assists from career-stats
+    cs = api_get_json(
+        api_base,
+        token,
+        "/api/v2/metrics/career-stats/players",
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 500},
+    )
+    cs_items = cs.get("items") or []
+
+    for it in cs_items:
+        sid = (it.get("season") or {}).get("id") or it.get("seasonId")
+        if not isinstance(sid, int) or sid not in season_ids:
+            continue
+
+        team_name = ((it.get("team") or {}).get("name") or "").strip() or "Unknown"
+        stats = it.get("stats") or {}
+
+        goals = int(round(_find_stat(stats, ["goal", "goals", "goalNonPenalty", "goal_non_penalty"])))
+        assists = int(round(_find_stat(stats, ["assist", "assists"])))
+
+        bucket = _ensure(sid, team_name)
+        bucket["GOALS"] += goals
+        bucket["ASSISTS"] += assists
+
+    return out
+
+
 def get_games_minutes_goals_assists_by_season(
     api_base: str,
     token: str,
@@ -1159,6 +1229,52 @@ def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
 # ----------------------------
 # Template filling (full notebook-style flow)
 # ----------------------------
+
+def apply_season_row_tokens_teamwise(
+    values: Dict[str, str],
+    season_label: str,
+    season_id_by_label: Dict[str, int],
+    teamwise_by_sid: Dict[int, Dict[str, Dict[str, int]]],
+    club_key: str,
+    g_key: str,
+    m_key: str,
+    go_key: str,
+    a_key: str,
+) -> None:
+    sid = season_id_by_label.get(season_label)
+    teams = teamwise_by_sid.get(sid) if isinstance(sid, int) else None
+
+    if not sid or not teams:
+        values[club_key] = ""
+        values[g_key] = ""
+        values[m_key] = ""
+        values[go_key] = ""
+        values[a_key] = ""
+        return
+
+    # Order teams by minutes (most relevant first)
+    ordered = sorted(teams.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
+
+    club_parts = []
+    g_parts = []
+    m_parts = []
+    go_parts = []
+    a_parts = []
+
+    for team_name, st in ordered:
+        club_parts.append(team_name)
+        g_parts.append(str(int(st.get("GAMES", 0))))
+        m_parts.append(str(int(st.get("MINUTES", 0))))
+        go_parts.append(str(int(st.get("GOALS", 0))))
+        a_parts.append(str(int(st.get("ASSISTS", 0))))
+
+    sep = " / " if len(ordered) > 1 else ""
+    values[club_key] = sep.join(club_parts)
+    values[g_key] = sep.join(g_parts)
+    values[m_key] = sep.join(m_parts)
+    values[go_key] = sep.join(go_parts)
+    values[a_key] = sep.join(a_parts)
+
 def fill_template_full(
     template_path: str,
     out_pptx_path: str,
@@ -1192,30 +1308,41 @@ def fill_template_full(
     season_ids_latest5 = pick_latest_season_ids(seasons_obj, n=5)
     season_id_by_label = build_season_id_by_label(seasons_obj)
     
-    target_labels = ["2024/2025", "2023/2024", "2022/2023"]
+    target_labels = ["2025/2026", "2024/2025"]
     target_season_ids = [season_id_by_label[lbl] for lbl in target_labels if lbl in season_id_by_label]
     
-    stats_by_sid = get_games_minutes_goals_assists_by_season(
+    # NEW: team-wise + competition-summed stats
+    teamwise_by_sid = get_teamwise_stats_by_season(
         api_base=api_base,
         token=token,
         player_id=player_id,
         season_ids=target_season_ids,
     )
-    
-    latest_season_id = season_ids_latest5[0] if season_ids_latest5 else 0
-    latest_stats_map = get_games_minutes_goals_assists_by_season(
-        api_base=api_base,
-        token=token,
-        player_id=player_id,
-        season_ids=[latest_season_id] if latest_season_id else [],
+
+    apply_season_row_tokens_teamwise(
+      values=values,
+      season_label="2025/2026",
+      season_id_by_label=season_id_by_label,
+      teamwise_by_sid=teamwise_by_sid,
+      club_key="CLUB_2025/2026",
+      g_key="G25/26",
+      m_key="M25/26",
+      go_key="GO25/26",
+      a_key="A25/26",
+  )
+
+    apply_season_row_tokens_teamwise(
+        values=values,
+        season_label="2024/2025",
+        season_id_by_label=season_id_by_label,
+        teamwise_by_sid=teamwise_by_sid,
+        club_key="CLUB_2024/2025",
+        g_key="G24/25",
+        m_key="M24/25",
+        go_key="GO24/25",
+        a_key="A24/25",
     )
-    latest_stats = latest_stats_map.get(latest_season_id)
-    
-    values["GAMES"] = str(latest_stats["GAMES"]) if latest_stats else ""
-    values["MINUTES"] = str(latest_stats["MINUTES"]) if latest_stats else ""
-    values["GOALS"] = str(latest_stats["GOALS"]) if latest_stats else ""
-    values["ASSISTS"] = str(latest_stats["ASSISTS"]) if latest_stats else ""
-    
+        
     apply_season_row_tokens_blank_if_missing(
         values=values,
         season_label="2024/2025",
