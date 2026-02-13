@@ -1518,10 +1518,10 @@ POSITION_TO_NUMBER: Dict[str, int] = {
     "RightBack": 2,
     "RightFullback": 2,
     "Right Back": 2,
-    "Centre Back": 3,
-    "CentreBack": 3,
-    "LeftBack": 4,
-    "Left Back": 4,
+    "Centre Back": 4,
+    "CentreBack": 4,
+    "LeftBack": 5,
+    "Left Back": 5,
 
     # Midfield (common API variants)
     "DefensiveMidfield": 6,
