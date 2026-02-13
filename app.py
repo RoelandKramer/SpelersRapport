@@ -91,6 +91,76 @@ FC_DEN_BOSCH_PLAYERS = [
 
 SEASON_SLOTS = ["2025/2026", "2024/2025", "2023/2024", "2022/2023"]
 
+def apply_spilled_rows_to_template_slots(values: Dict[str, str], rows: List[Dict[str, Any]]) -> None:
+    """
+    rows: list of dicts with keys: season, team, GAMES, MINUTES, GOALS, ASSISTS
+    The *slot* is fixed (2025/2026 row, 2024/2025 row, etc),
+    but YEAR_* must reflect rows[i]["season"].
+    """
+    # Ensure exactly 4 rows (pad with empties)
+    padded = (rows or [])[:4]
+    while len(padded) < 4:
+        padded.append({"season": "", "team": "", "GAMES": "", "MINUTES": "", "GOALS": "", "ASSISTS": ""})
+
+    # Map slot -> template keys
+    slot_to_keys = {
+        "2025/2026": ("CLUB_2025/2026", "YEAR_2025/2026", "G25/26", "M25/26", "GO25/26", "A25/26"),
+        "2024/2025": ("CLUB_2024/2025", "YEAR_2024/2025", "G24/25", "M24/25", "GO24/25", "A24/25"),
+        "2023/2024": ("CLUB_2023/2024", "YEAR_2023/2024", "G23/24", "M23/24", "GO23/24", "A23/24"),
+        "2022/2023": ("CLUB_2022/2023", "YEAR_2022/2023", "G22/23", "M22/23", "GO22/23", "A22/23"),
+    }
+
+    for i, slot in enumerate(SEASON_SLOTS):
+        club_k, year_k, g_k, m_k, go_k, a_k = slot_to_keys[slot]
+        r = padded[i]
+
+        values[club_k] = str(r.get("team") or "")
+        values[year_k] = str(r.get("season") or "")  # <-- critical: year comes from row season, not slot
+        values[g_k] = "" if r.get("team") in {"", None} else str(r.get("GAMES", ""))
+        values[m_k] = "" if r.get("team") in {"", None} else str(r.get("MINUTES", ""))
+        values[go_k] = "" if r.get("team") in {"", None} else str(r.get("GOALS", ""))
+        values[a_k] = "" if r.get("team") in {"", None} else str(r.get("ASSISTS", ""))
+
+def build_rows_with_spill(
+    season_slots: List[str],
+    season_ids_by_label: Dict[str, List[int]],
+    totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
+    max_rows: int = 4,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+
+    for season_label in season_slots:
+        sids = season_ids_by_label.get(season_label) or []
+        if not sids:
+            continue
+
+        # Merge across sids for that season label (same logic as your teamwise merge)
+        merged: Dict[str, Dict[str, int]] = {}
+        for sid in sids:
+            for team, st in (totals_by_sid.get(sid) or {}).items():
+                b = merged.setdefault(team, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
+                b["GAMES"] += int(st.get("GAMES", 0))
+                b["MINUTES"] += int(st.get("MINUTES", 0))
+                b["GOALS"] += int(st.get("GOALS", 0))
+                b["ASSISTS"] += int(st.get("ASSISTS", 0))
+
+        # Convert into rows (1 row per team), sorted by minutes
+        ordered = sorted(merged.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
+        if not ordered:
+            ranges = extract_club_ranges_from_player(player_obj)  # pass in player JSON
+            club = club_for_season_from_ranges(season_label, ranges)
+            if club:
+                rows.append({"season": season_label, "team": club, "GAMES": "", "MINUTES": "", "GOALS": "", "ASSISTS": ""})
+        for team, st in ordered:
+            if not team or team == "Unknown":
+                continue
+            rows.append({"season": season_label, "team": team, **st})
+
+        if len(rows) >= max_rows:
+            break
+
+    return rows[:max_rows]
+
 def _suffix_for_season_label(label: str) -> str:
     # "2024/2025" -> "24/25"
     y1, y2 = label.split("/")
@@ -146,43 +216,42 @@ def build_rows_with_spill(
 
     return rows
 
+def _club_with_year(team: str, season: str) -> str:
+    team = (team or "").strip()
+    season = (season or "").strip()
+    if not team:
+        return ""
+    return f"{team} ({season})" if season else team
 
-def apply_spilled_rows_to_template_slots(values: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
-    """
-    Map rows[0..3] onto fixed template slots:
-      row0 -> tokens for 2025/2026
-      row1 -> tokens for 2024/2025
-      row2 -> tokens for 2023/2024
-      row3 -> tokens for 2022/2023
-    YEAR_* is filled from the row's season label (so it can repeat for split seasons).
-    """
-    for i, slot_label in enumerate(SEASON_SLOTS):
-        suffix = _suffix_for_season_label(slot_label)
 
-        club_key = f"CLUB_{slot_label}"
-        year_key = f"YEAR_{slot_label}"
+def apply_spilled_rows_to_template_slots(values: Dict[str, str], rows: List[Dict[str, Any]]) -> None:
+    padded = (rows or [])[:4]
+    while len(padded) < 4:
+        padded.append({"season": "", "team": "", "GAMES": "", "MINUTES": "", "GOALS": "", "ASSISTS": ""})
 
-        g_key = f"G{suffix}"
-        m_key = f"M{suffix}"
-        go_key = f"GO{suffix}"
-        a_key = f"A{suffix}"
+    slot_to_keys = {
+        "2025/2026": ("CLUB_2025/2026", "YEAR_2025/2026", "G25/26", "M25/26", "GO25/26", "A25/26"),
+        "2024/2025": ("CLUB_2024/2025", "YEAR_2024/2025", "G24/25", "M24/25", "GO24/25", "A24/25"),
+        "2023/2024": ("CLUB_2023/2024", "YEAR_2023/2024", "G23/24", "M23/24", "GO23/24", "A23/24"),
+        "2022/2023": ("CLUB_2022/2023", "YEAR_2022/2023", "G22/23", "M22/23", "GO22/23", "A22/23"),
+    }
 
-        if i >= len(rows):
-            values[club_key] = ""
-            values[year_key] = ""
-            values[g_key] = ""
-            values[m_key] = ""
-            values[go_key] = ""
-            values[a_key] = ""
-            continue
+    for i, slot in enumerate(SEASON_SLOTS):
+        club_k, year_k, g_k, m_k, go_k, a_k = slot_to_keys[slot]
+        r = padded[i]
 
-        r = rows[i]
-        values[club_key] = r["team"]
-        values[year_key] = r["season"]  # <-- this is the crucial part for "same year on spill"
-        values[g_key] = str(r["GAMES"])
-        values[m_key] = str(r["MINUTES"])
-        values[go_key] = str(r["GOALS"])
-        values[a_key] = str(r["ASSISTS"])
+        season = str(r.get("season") or "")
+        team = str(r.get("team") or "")
+
+        values[year_k] = season
+        values[club_k] = _club_with_year(team, season)
+
+        has_team = bool(team.strip())
+        values[g_k]  = str(r.get("GAMES", ""))   if has_team else ""
+        values[m_k]  = str(r.get("MINUTES", "")) if has_team else ""
+        values[go_k] = str(r.get("GOALS", ""))   if has_team else ""
+        values[a_k]  = str(r.get("ASSISTS", "")) if has_team else ""
+
 
 def _image_name_aliases(player_name: str) -> List[str]:
     """
@@ -1723,6 +1792,60 @@ def apply_position_coloring(*, prs, slide, ordered_positions: List[str], preferr
 # ----------------------------
 # Template filling (full notebook-style flow)
 # ----------------------------
+def extract_club_ranges_from_player(player_obj: dict) -> List[Tuple[int, Optional[int], str]]:
+    """
+    Returns list of (start_year, end_year_or_None, team_name)
+    Looks for common career-history shapes; safe if absent.
+    """
+    candidates = []
+    for key in ["career", "careerHistory", "teamHistory", "teams", "history"]:
+        v = player_obj.get(key)
+        if isinstance(v, list):
+            candidates = v
+            break
+
+    out: List[Tuple[int, Optional[int], str]] = []
+    for it in candidates:
+        if not isinstance(it, dict):
+            continue
+        team = ((it.get("team") or {}).get("name") or it.get("teamName") or "").strip()
+        if not team:
+            continue
+
+        # try fields like startYear/endYear or startDate/endDate
+        sy = it.get("startYear")
+        ey = it.get("endYear")
+
+        if sy is None and it.get("startDate"):
+            try:
+                sy = int(str(it["startDate"])[:4])
+            except Exception:
+                sy = None
+        if ey is None and it.get("endDate"):
+            try:
+                ey = int(str(it["endDate"])[:4])
+            except Exception:
+                ey = None
+
+        if isinstance(sy, int):
+            out.append((sy, ey if isinstance(ey, int) else None, team))
+    return out
+
+
+def club_for_season_from_ranges(season_label: str, ranges: List[Tuple[int, Optional[int], str]]) -> str:
+    m = SEASON_RE.search(season_label or "")
+    if not m:
+        return ""
+    y0 = int(m.group(1))  # season start year
+    y1 = int(m.group(2))  # season end year
+
+    # Match if range overlaps [y0, y1]
+    for sy, ey, team in ranges:
+        ey2 = ey if ey is not None else 9999
+        if sy <= y0 and ey2 >= y1:
+            return team
+    return ""
+
 
 def fill_template_full(
     template_path: str,
@@ -1773,8 +1896,8 @@ def fill_template_full(
         totals_by_sid=totals_by_sid,
         max_rows=4,
     )
-    
     apply_spilled_rows_to_template_slots(values, rows)
+
 
     
     # apply_season_row_tokens_teamwise(
