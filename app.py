@@ -1708,12 +1708,12 @@ def fill_template_full(
             inserted["performance"] += insert_image_at_token_exact(slide, "{{PERFORMANCE_CHART}}", perf_png)
             inserted["performance"] += replace_textbox_exact_with_image(slide, "{PRESTATIES_FIGURE}", performance_upload_bytes)
     
-    for shape in slide.shapes:
-        if replace_tokens_in_shape(shape, values):
-            inserted["text_shapes_changed"] += 1
-    
-    apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
-    
+        for shape in slide.shapes:
+            if replace_tokens_in_shape(shape, values):
+                inserted["text_shapes_changed"] += 1
+        
+        apply_position_coloring(slide, values.get("_POSITIONS_ORDERED", []))
+        
 
     prs.save(out_pptx_path)
 
