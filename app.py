@@ -741,16 +741,17 @@ def _normalize_season_name(name: str) -> str:
     return normalize_season_label(name) if "normalize_season_label" in globals() else str(name).strip()
 
 
-def build_season_id_by_label(seasons_obj: dict) -> Dict[str, int]:
+def build_season_ids_by_label(seasons_obj: dict) -> Dict[str, List[int]]:
     """
-    Returns mapping like {"2024/2025": 123, ...} based on /api/v2/Seasons response.
+    Returns mapping like {"2024/2025": [123, 456, ...], ...}
+    because SciSports has multiple season IDs per year (per competition).
     """
-    out: Dict[str, int] = {}
+    out: Dict[str, List[int]] = {}
     for it in items_of(seasons_obj):
         sid = it.get("id")
         sname = _normalize_season_name((it.get("name") or "").strip())
         if isinstance(sid, int) and sname:
-            out[sname] = sid
+            out.setdefault(sname, []).append(sid)
     return out
 
 
@@ -848,6 +849,7 @@ def get_career_stats_totals_by_season_team(
     2) Otherwise, for each season+team+competition take MAX (rows are often cumulative),
        then sum across competitions.
     """
+
     cs = api_get_json(
         api_base,
         token,
@@ -883,6 +885,10 @@ def get_career_stats_totals_by_season_team(
 
     for it in items:
         sid = (it.get("season") or {}).get("id") or it.get("seasonId")
+        # inside loop, before summing:
+        comp = (it.get("competition") or {}).get("name") or (it.get("league") or {}).get("name") or ""
+        season_name = (it.get("season") or {}).get("name") or ""
+        # print(comp, season_name, team_name, games, minutes, goals, assists)
         if not isinstance(sid, int) or sid not in season_ids:
             continue
 
@@ -1012,7 +1018,7 @@ def get_games_minutes_goals_assists_by_season(
 def apply_season_row_tokens_teamwise(
     values: Dict[str, str],
     season_label: str,
-    season_id_by_label: Dict[str, int],
+    season_ids_by_label: Dict[str, List[int]],
     totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
     club_key: str,
     g_key: str,
@@ -1020,19 +1026,27 @@ def apply_season_row_tokens_teamwise(
     go_key: str,
     a_key: str,
 ) -> None:
-    sid = season_id_by_label.get(season_label)
-    teams = totals_by_sid.get(sid) if isinstance(sid, int) else None
-
-    if not sid or not teams:
-        values[club_key] = ""
-        values[g_key] = ""
-        values[m_key] = ""
-        values[go_key] = ""
-        values[a_key] = ""
+    season_ids = season_ids_by_label.get(season_label) or []
+    if not season_ids:
+        values[club_key] = values[g_key] = values[m_key] = values[go_key] = values[a_key] = ""
         return
 
-    # Sort by minutes desc so primary club appears first
-    ordered = sorted(teams.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
+    # Merge across ALL competition-season IDs for that label
+    merged: Dict[str, Dict[str, int]] = {}
+    for sid in season_ids:
+        teams = totals_by_sid.get(sid) or {}
+        for team_name, st in teams.items():
+            bucket = merged.setdefault(team_name, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
+            bucket["GAMES"] += int(st.get("GAMES", 0))
+            bucket["MINUTES"] += int(st.get("MINUTES", 0))
+            bucket["GOALS"] += int(st.get("GOALS", 0))
+            bucket["ASSISTS"] += int(st.get("ASSISTS", 0))
+
+    if not merged:
+        values[club_key] = values[g_key] = values[m_key] = values[go_key] = values[a_key] = ""
+        return
+
+    ordered = sorted(merged.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
     sep = " / " if len(ordered) > 1 else ""
 
     values[club_key] = sep.join([team for team, _ in ordered])
@@ -1585,11 +1599,13 @@ def fill_template_full(
     # Seasons (keep what you already have)
     seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
     season_ids_latest5 = pick_latest_season_ids(seasons_obj, n=5)
-    season_id_by_label = build_season_id_by_label(seasons_obj)
+    season_ids_by_label = build_season_ids_by_label(seasons_obj)
     
-    # Only seasons that should use career-stats totals
     target_labels = ["2025/2026", "2024/2025"]
-    target_season_ids = [season_id_by_label[lbl] for lbl in target_labels if lbl in season_id_by_label]
+    target_season_ids = []
+    for lbl in target_labels:
+        target_season_ids.extend(season_ids_by_label.get(lbl, []))
+
     
     totals_by_sid = get_career_stats_totals_by_season_team(
         api_base=api_base,
@@ -1601,8 +1617,8 @@ def fill_template_full(
     apply_season_row_tokens_teamwise(
         values=values,
         season_label="2025/2026",
-        season_id_by_label=season_id_by_label,
-        totals_by_sid=totals_by_sid,   # ✅ this keyword
+        season_ids_by_label=season_ids_by_label,
+        totals_by_sid=totals_by_sid,
         club_key="CLUB_2025/2026",
         g_key="G25/26",
         m_key="M25/26",
@@ -1613,14 +1629,15 @@ def fill_template_full(
     apply_season_row_tokens_teamwise(
         values=values,
         season_label="2024/2025",
-        season_id_by_label=season_id_by_label,
-        totals_by_sid=totals_by_sid,   # ✅ this keyword
+        season_ids_by_label=season_ids_by_label,
+        totals_by_sid=totals_by_sid,
         club_key="CLUB_2024/2025",
         g_key="G24/25",
         m_key="M24/25",
         go_key="GO24/25",
         a_key="A24/25",
     )
+
     
     # For older seasons: club only (already set in build_personal_values via season_team_best)
     # Do NOT override CLUB_2023/2024 and CLUB_2022/2023 here.
