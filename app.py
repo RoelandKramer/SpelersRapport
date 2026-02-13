@@ -1314,7 +1314,7 @@ def apply_season_row_tokens_teamwise(
     values: Dict[str, str],
     season_label: str,
     season_id_by_label: Dict[str, int],
-    teamwise_by_sid: Dict[int, Dict[str, Dict[str, int]]],
+    totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
     club_key: str,
     g_key: str,
     m_key: str,
@@ -1402,7 +1402,7 @@ def fill_template_full(
         values=values,
         season_label="2025/2026",
         season_id_by_label=season_id_by_label,
-        totals_by_sid=totals_by_sid,
+        teamwise_by_sid=totals_by_sid,   # <-- change this line
         club_key="CLUB_2025/2026",
         g_key="G25/26",
         m_key="M25/26",
@@ -1414,7 +1414,7 @@ def fill_template_full(
         values=values,
         season_label="2024/2025",
         season_id_by_label=season_id_by_label,
-        totals_by_sid=totals_by_sid,
+        teamwise_by_sid=totals_by_sid,   # <-- and this line
         club_key="CLUB_2024/2025",
         g_key="G24/25",
         m_key="M24/25",
