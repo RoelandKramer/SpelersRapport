@@ -59,6 +59,8 @@ import requests
 import streamlit as st
 from pptx import Presentation
 from pathlib import Path
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+
 
 
 # ----------------------------
@@ -1544,6 +1546,15 @@ POSITION_TO_NUMBER: Dict[str, int] = {
 
 MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
 SECOND_BLUE = RGBColor(0, 142, 204)   # adjust to your exact template light-blue if needed
+
+def _iter_shapes(container):
+    """Yield shapes recursively (handles grouped shapes too)."""
+    for sh in container.shapes:
+        yield sh
+        if sh.shape_type == MSO_SHAPE_TYPE.GROUP:
+            for child in _iter_shapes(sh):
+                yield child
+
 def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
     if not ordered_positions:
         return
@@ -1555,14 +1566,28 @@ def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
         if p in POSITION_TO_NUMBER
     ]
 
-    for shape in slide.shapes:
+    # --- Restrict to formation/pitch area (top-right) ---
+    W = slide.part.presentation.slide_width
+    H = slide.part.presentation.slide_height
+    x_min = int(W * 0.62)
+    y_max = int(H * 0.38)
+
+    for shape in _iter_shapes(slide):
         if not getattr(shape, "has_text_frame", False):
             continue
+
+        # Only shapes located in the top-right pitch box
+        if not (shape.left >= x_min and shape.top <= y_max):
+            continue
+
         txt = (shape.text_frame.text or "").strip()
         if not txt.isdigit():
             continue
 
         num = int(txt)
+        if num < 1 or num > 11:
+            continue
+
         if main_num is not None and num == main_num:
             shape.fill.solid()
             shape.fill.fore_color.rgb = MAIN_BLUE
