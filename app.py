@@ -1310,51 +1310,6 @@ def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
 # Template filling (full notebook-style flow)
 # ----------------------------
 
-def apply_season_row_tokens_teamwise(
-    values: Dict[str, str],
-    season_label: str,
-    season_id_by_label: Dict[str, int],
-    totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
-    club_key: str,
-    g_key: str,
-    m_key: str,
-    go_key: str,
-    a_key: str,
-) -> None:
-    sid = season_id_by_label.get(season_label)
-    teams = teamwise_by_sid.get(sid) if isinstance(sid, int) else None
-
-    if not sid or not teams:
-        values[club_key] = ""
-        values[g_key] = ""
-        values[m_key] = ""
-        values[go_key] = ""
-        values[a_key] = ""
-        return
-
-    # Order teams by minutes (most relevant first)
-    ordered = sorted(teams.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
-
-    club_parts = []
-    g_parts = []
-    m_parts = []
-    go_parts = []
-    a_parts = []
-
-    for team_name, st in ordered:
-        club_parts.append(team_name)
-        g_parts.append(str(int(st.get("GAMES", 0))))
-        m_parts.append(str(int(st.get("MINUTES", 0))))
-        go_parts.append(str(int(st.get("GOALS", 0))))
-        a_parts.append(str(int(st.get("ASSISTS", 0))))
-
-    sep = " / " if len(ordered) > 1 else ""
-    values[club_key] = sep.join(club_parts)
-    values[g_key] = sep.join(g_parts)
-    values[m_key] = sep.join(m_parts)
-    values[go_key] = sep.join(go_parts)
-    values[a_key] = sep.join(a_parts)
-
 def fill_template_full(
     template_path: str,
     out_pptx_path: str,
