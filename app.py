@@ -1567,11 +1567,10 @@ def _iter_shapes(container):
             for child in _iter_shapes(sh):
                 yield child
 
-def apply_position_coloring(prs, slide, ordered_positions: List[str], preferred_foot: str = "") -> None:
+def apply_position_coloring(*, prs, slide, ordered_positions: List[str], preferred_foot: str = "") -> None:
     if not ordered_positions:
         return
 
-    # right/left-foot tweak (we can add after this works)
     main_num = POSITION_TO_NUMBER.get(ordered_positions[0])
     secondary_nums = [
         POSITION_TO_NUMBER.get(p)
@@ -1579,15 +1578,28 @@ def apply_position_coloring(prs, slide, ordered_positions: List[str], preferred_
         if p in POSITION_TO_NUMBER
     ]
 
-    # ✅ use prs, not slide.part.presentation
+    # ✅ width/height come from prs
     W = prs.slide_width
     H = prs.slide_height
     x_min = int(W * 0.62)
     y_max = int(H * 0.38)
 
-    for shape in _iter_shapes(slide):
+    foot = (preferred_foot or "").strip().lower()
+    is_left = foot in {"left", "l", "left foot", "links"}
+    is_right = foot in {"right", "r", "right foot", "rechts"}
+
+    # Example: centre back footedness mapping (adjust strings if needed)
+    if ordered_positions and ordered_positions[0] in {"Centre Back", "CentreBack"}:
+        if is_left:
+            main_num = 4
+        elif is_right:
+            main_num = 3
+
+    for shape in _iter_shapes(slide) if "._iter_shapes" else slide.shapes:
         if not getattr(shape, "has_text_frame", False):
             continue
+
+        # Only shapes located in the top-right pitch box
         if not (shape.left >= x_min and shape.top <= y_max):
             continue
 
@@ -1605,7 +1617,6 @@ def apply_position_coloring(prs, slide, ordered_positions: List[str], preferred_
         elif num in secondary_nums:
             shape.fill.solid()
             shape.fill.fore_color.rgb = SECOND_BLUE
-
 # ----------------------------
 # Template filling (full notebook-style flow)
 # ----------------------------
@@ -1747,12 +1758,13 @@ def fill_template_full(
         for shape in slide.shapes:
             if replace_tokens_in_shape(shape, values):
                 inserted["text_shapes_changed"] += 1
-        
+                
         apply_position_coloring(
-            slide,
-            values.get("_POSITIONS_ORDERED", []),
-            values.get("PREFERRED_FOOT", ""),
-        )        
+            prs=prs,
+            slide=slide,
+            ordered_positions=values.get("_POSITIONS_ORDERED", []),
+            preferred_foot=values.get("PREFERRED_FOOT", ""),
+        )
 
     prs.save(out_pptx_path)
 
