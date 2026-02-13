@@ -1345,13 +1345,13 @@ def fill_template_full(
         
 
 
-    strengths_line, percentile = compute_strengths_and_percentile_from_api(
-        api_base=api_base,
-        token=token,
-        player_id=int(player_id),
-        season_id=int(latest_season_id) if latest_season_id else int(stats.get("season_id", 0)),
-    )
-    values["STRENGTHS"] = strengths_line
+    # strengths_line, percentile = compute_strengths_and_percentile_from_api(
+    #     api_base=api_base,
+    #     token=token,
+    #     player_id=int(player_id),
+    #     season_id=int(latest_season_id) if latest_season_id else int(stats.get("season_id", 0)),
+    # )
+    # values["STRENGTHS"] = strengths_line
 
     # Player image bytes (local first; fallback API imageUrl)
     player_img_bytes: Optional[bytes] = None
