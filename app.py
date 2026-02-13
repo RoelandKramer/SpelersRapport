@@ -98,20 +98,15 @@ def build_rows_with_spill(
     season_slots: List[str],
     season_ids_by_label: Dict[str, List[int]],
     totals_by_sid: Dict[int, Dict[str, Dict[str, int]]],
+    season_team_fallback: Dict[str, str],
     max_rows: int = 4,
 ) -> List[Dict[str, Any]]:
-    """
-    Returns up to max_rows rows. Each season can contribute 1+ team rows.
-    Row keys are: season, team, games, minutes, goals, assists
-    """
     rows: List[Dict[str, Any]] = []
 
     for season_label in season_slots:
         sids = season_ids_by_label.get(season_label) or []
-        if not sids:
-            continue
 
-        # merge all comp-season-IDs into one season bucket (per team)
+        # merge stats per team across all season IDs for this label
         merged: Dict[str, Dict[str, int]] = {}
         for sid in sids:
             for team_name, st in (totals_by_sid.get(sid) or {}).items():
@@ -123,27 +118,40 @@ def build_rows_with_spill(
                 b["GOALS"] += int(st.get("GOALS", 0))
                 b["ASSISTS"] += int(st.get("ASSISTS", 0))
 
-        if not merged:
-            continue
-
-        # order by minutes (main team first)
-        ordered = sorted(merged.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
-
-        for team_name, st in ordered:
-            rows.append(
-                {
-                    "season": season_label,
-                    "team": team_name,
-                    "games": int(st.get("GAMES", 0)),
-                    "minutes": int(st.get("MINUTES", 0)),
-                    "goals": int(st.get("GOALS", 0)),
-                    "assists": int(st.get("ASSISTS", 0)),
-                }
-            )
-            if len(rows) >= max_rows:
-                return rows
+        if merged:
+            ordered = sorted(merged.items(), key=lambda kv: kv[1].get("MINUTES", 0), reverse=True)
+            for team_name, st in ordered:
+                rows.append(
+                    {
+                        "season": season_label,
+                        "team": team_name,
+                        "games": int(st.get("GAMES", 0)),
+                        "minutes": int(st.get("MINUTES", 0)),
+                        "goals": int(st.get("GOALS", 0)),
+                        "assists": int(st.get("ASSISTS", 0)),
+                    }
+                )
+                if len(rows) >= max_rows:
+                    return rows
+        else:
+            # ✅ fallback: still show club even if there are no stats rows
+            fallback_team = (season_team_fallback.get(season_label) or "").strip()
+            if fallback_team:
+                rows.append(
+                    {
+                        "season": season_label,
+                        "team": fallback_team,
+                        "games": "",
+                        "minutes": "",
+                        "goals": "",
+                        "assists": "",
+                    }
+                )
+                if len(rows) >= max_rows:
+                    return rows
 
     return rows
+
 
 def apply_spilled_rows_to_template_slots(values: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
     """
@@ -437,20 +445,41 @@ def _is_toto_knvb_beker_nld(item: dict) -> bool:
     has_nld = ("(nld)" in blob) or (" nld" in blob) or ("countrycode nld" in blob) or ("alpha3code nld" in blob)
     return bool(has_name and has_nld)
   
+# Accept:
+#  - 2023/2024
+#  - 2023-2024
+#  - 2023/24
+#  - 2023-24
+SEASON_RE = re.compile(r"\b(20\d{2})\s*[/\-]\s*(\d{2}|20\d{2})\b")
+
 def normalize_season_label(name: str) -> str:
     """
     Normalize season strings to 'YYYY/YYYY' when possible.
     Examples:
       '2023/2024 Regular Season' -> '2023/2024'
       '2023-2024' -> '2023/2024'
-      '2023/24' -> '' (unknown)  # add more logic if needed
+      '2023/24' -> '2023/2024'
+      '2023-24' -> '2023/2024'
     """
     if not name:
         return ""
     m = SEASON_RE.search(str(name))
     if not m:
         return ""
-    return f"{m.group(1)}/{m.group(2)}"
+    y1 = int(m.group(1))
+    y2_raw = m.group(2)
+
+    if len(y2_raw) == 2:
+        # 23 -> 2024 (season end year)
+        y2 = (y1 // 100) * 100 + int(y2_raw)
+        # handle wrap like 1999/00 style (not expected here, but safe)
+        if y2 < y1:
+            y2 += 100
+    else:
+        y2 = int(y2_raw)
+
+    return f"{y1}/{y2}"
+
 
 # ----------------------------
 # App configuration (match your repo file names exactly)
@@ -1835,24 +1864,23 @@ def fill_template_full(
     for lbl in SEASON_SLOTS:
         target_season_ids.extend(season_ids_by_label.get(lbl, []))
     
-    totals_by_sid = get_career_stats_totals_by_season_team(
-        api_base=api_base,
-        token=token,
-        player_id=player_id,
-        season_ids=target_season_ids,
-    )
+    season_team_fallback = {
+        "2025/2026": values.get("CLUB_2025/2026", ""),
+        "2024/2025": values.get("CLUB_2024/2025", ""),
+        "2023/2024": values.get("CLUB_2023/2024", ""),
+        "2022/2023": values.get("CLUB_2022/2023", ""),
+    }
     
     rows = build_rows_with_spill(
         season_slots=SEASON_SLOTS,
         season_ids_by_label=season_ids_by_label,
         totals_by_sid=totals_by_sid,
+        season_team_fallback=season_team_fallback,
         max_rows=4,
     )
-    
     apply_spilled_rows_to_template_slots(values, rows)
-
-
     
+        
     # apply_season_row_tokens_teamwise(
     #     values=values,
     #     season_label="2025/2026",
