@@ -90,36 +90,38 @@ FC_DEN_BOSCH_PLAYERS = [
 ]
 
 SEASON_SLOTS = ["2025/2026", "2024/2025", "2023/2024", "2022/2023"]
+ROW_KEYS = ["ROW1", "ROW2", "ROW3", "ROW4"]
 
-def apply_spilled_rows_to_template_slots(values: Dict[str, str], rows: List[Dict[str, Any]]) -> None:
+def apply_spilled_rows_to_template_slots(values: Dict[str, Any], rows: List[dict]) -> None:
     """
-    rows: list of dicts with keys: season, team, GAMES, MINUTES, GOALS, ASSISTS
-    The *slot* is fixed (2025/2026 row, 2024/2025 row, etc),
-    but YEAR_* must reflect rows[i]["season"].
+    rows item format:
+      {"club": "RKC Waalwijk", "season": "2024/2025", "games": 11, "minutes": 522, "goals": 0, "assists": 0}
+    Writes into template tokens for 4 fixed rows.
+    Also clears unused rows so last row becomes blank if not used.
     """
-    # Ensure exactly 4 rows (pad with empties)
-    padded = (rows or [])[:4]
-    while len(padded) < 4:
-        padded.append({"season": "", "team": "", "GAMES": "", "MINUTES": "", "GOALS": "", "ASSISTS": ""})
+    # clear all rows first
+    for rk in ROW_KEYS:
+        values[f"TEAM_{rk}"] = ""
+        values[f"G_{rk}"] = ""
+        values[f"M_{rk}"] = ""
+        values[f"GO_{rk}"] = ""
+        values[f"A_{rk}"] = ""
 
-    # Map slot -> template keys
-    slot_to_keys = {
-        "2025/2026": ("CLUB_2025/2026", "YEAR_2025/2026", "G25/26", "M25/26", "GO25/26", "A25/26"),
-        "2024/2025": ("CLUB_2024/2025", "YEAR_2024/2025", "G24/25", "M24/25", "GO24/25", "A24/25"),
-        "2023/2024": ("CLUB_2023/2024", "YEAR_2023/2024", "G23/24", "M23/24", "GO23/24", "A23/24"),
-        "2022/2023": ("CLUB_2022/2023", "YEAR_2022/2023", "G22/23", "M22/23", "GO22/23", "A22/23"),
-    }
+        # if you still have year tokens in template, blank them so they don’t duplicate
+        values[f"YEAR_{rk}"] = ""
 
-    for i, slot in enumerate(SEASON_SLOTS):
-        club_k, year_k, g_k, m_k, go_k, a_k = slot_to_keys[slot]
-        r = padded[i]
+    for i, row in enumerate(rows[:4]):
+        rk = ROW_KEYS[i]
+        season = (row.get("season") or "").strip()
+        club = (row.get("club") or "").strip()
 
-        values[club_k] = str(r.get("team") or "")
-        values[year_k] = str(r.get("season") or "")  # <-- critical: year comes from row season, not slot
-        values[g_k] = "" if r.get("team") in {"", None} else str(r.get("GAMES", ""))
-        values[m_k] = "" if r.get("team") in {"", None} else str(r.get("MINUTES", ""))
-        values[go_k] = "" if r.get("team") in {"", None} else str(r.get("GOALS", ""))
-        values[a_k] = "" if r.get("team") in {"", None} else str(r.get("ASSISTS", ""))
+        # ✅ Put year in brackets right next to team name
+        values[f"TEAM_{rk}"] = f"{club} ({season})" if club and season else (club or "")
+
+        values[f"G_{rk}"]  = str(row.get("games", "") if row.get("games", "") != 0 else row.get("games", 0))
+        values[f"M_{rk}"]  = str(row.get("minutes", "") if row.get("minutes", "") != 0 else row.get("minutes", 0))
+        values[f"GO_{rk}"] = str(row.get("goals", "") if row.get("goals", "") != 0 else row.get("goals", 0))
+        values[f"A_{rk}"]  = str(row.get("assists", "") if row.get("assists", "") != 0 else row.get("assists", 0))
 
 def build_rows_with_spill(
     season_slots: List[str],
@@ -779,8 +781,14 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     team = player.get("team") or {}
     contract = player.get("contract") or {}
 
-    seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 200})
-    season_ids = pick_latest_season_ids(seasons_obj, n=5)
+    seasons_obj = api_get_json(api_base, token, "/api/v2/Seasons", params={"PlayerIds": player_id, "Limit": 500})
+    season_ids_by_label = build_season_ids_by_label(seasons_obj)
+    
+    season_ids = []
+    for lbl in SEASON_SLOTS:
+        season_ids.extend(season_ids_by_label.get(lbl, []))
+    season_ids = list(sorted(set(season_ids)))
+
 
     # Build best team per season using fallbacks, then x-metrics override.
     cs_obj = api_get_json(
