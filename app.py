@@ -1343,41 +1343,6 @@ def fill_template_full(
         a_key="A24/25",
     )
         
-    apply_season_row_tokens_blank_if_missing(
-        values=values,
-        season_label="2024/2025",
-        season_id_by_label=season_id_by_label,
-        stats_by_sid=stats_by_sid,
-        club_key="CLUB_2024/2025",
-        g_key="G24/25",
-        m_key="M24/25",
-        go_key="GO24/25",
-        a_key="A24/25",
-    )
-    
-    apply_season_row_tokens_blank_if_missing(
-        values=values,
-        season_label="2023/2024",
-        season_id_by_label=season_id_by_label,
-        stats_by_sid=stats_by_sid,
-        club_key="CLUB_2023/2024",
-        g_key="G23/24",
-        m_key="M23/24",
-        go_key="GO23/24",
-        a_key="A23/24",
-    )
-    
-    apply_season_row_tokens_blank_if_missing(
-        values=values,
-        season_label="2022/2023",
-        season_id_by_label=season_id_by_label,
-        stats_by_sid=stats_by_sid,
-        club_key="CLUB_2022/2023",
-        g_key="G22/23",
-        m_key="M22/23",
-        go_key="GO22/23",
-        a_key="A22/23",
-    )
 
 
     strengths_line, percentile = compute_strengths_and_percentile_from_api(
