@@ -1543,17 +1543,13 @@ POSITION_TO_NUMBER: Dict[str, int] = {
 }
 
 def _resolve_position_number(position: str, preferred_foot: str) -> Optional[int]:
-    """
-    Returns the shirt/formation number for a position, with special logic for CentreBack:
-      - right-footed -> 3
-      - left-footed  -> 4
-    """
     if position in ("CentreBack", "Centre Back"):
         pf = (preferred_foot or "").strip().lower()
-        # Treat anything starting with 'l' as left, else right
-        return 4 if pf.startswith("l") else 3
+        is_left = ("left" in pf) or pf.startswith("l")
+        return 4 if is_left else 3
 
     return POSITION_TO_NUMBER.get(position)
+
 
 
 MAIN_BLUE = RGBColor(0, 83, 159)      # adjust to your exact template blue if needed
@@ -1571,12 +1567,14 @@ def apply_position_coloring(*, prs, slide, ordered_positions: List[str], preferr
     if not ordered_positions:
         return
 
-    main_num = POSITION_TO_NUMBER.get(ordered_positions[0])
-    secondary_nums = [
-        POSITION_TO_NUMBER.get(p)
-        for p in ordered_positions[1:3]
-        if p in POSITION_TO_NUMBER
-    ]
+    # ✅ resolve numbers dynamically (CB -> 3 or 4 depending on foot)
+    main_num = _resolve_position_number(ordered_positions[0], preferred_foot)
+
+    secondary_nums = []
+    for p in ordered_positions[1:3]:
+        n = _resolve_position_number(p, preferred_foot)
+        if n is not None:
+            secondary_nums.append(n)
 
     # ✅ width/height come from prs
     W = prs.slide_width
@@ -1584,22 +1582,10 @@ def apply_position_coloring(*, prs, slide, ordered_positions: List[str], preferr
     x_min = int(W * 0.62)
     y_max = int(H * 0.38)
 
-    foot = (preferred_foot or "").strip().lower()
-    is_left = foot in {"left", "l", "left foot", "links"}
-    is_right = foot in {"right", "r", "right foot", "rechts"}
-
-    # Example: centre back footedness mapping (adjust strings if needed)
-    if ordered_positions and ordered_positions[0] in {"Centre Back", "CentreBack"}:
-        if is_left:
-            main_num = 4
-        elif is_right:
-            main_num = 3
-
-    for shape in _iter_shapes(slide) if "._iter_shapes" else slide.shapes:
+    for shape in _iter_shapes(slide):
         if not getattr(shape, "has_text_frame", False):
             continue
 
-        # Only shapes located in the top-right pitch box
         if not (shape.left >= x_min and shape.top <= y_max):
             continue
 
@@ -1617,6 +1603,7 @@ def apply_position_coloring(*, prs, slide, ordered_positions: List[str], preferr
         elif num in secondary_nums:
             shape.fill.solid()
             shape.fill.fore_color.rgb = SECOND_BLUE
+
 # ----------------------------
 # Template filling (full notebook-style flow)
 # ----------------------------
