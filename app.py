@@ -89,6 +89,21 @@ FC_DEN_BOSCH_PLAYERS = [
     {"name": "Luc van Koeverden", "player_id": 673690},
 ]
 
+def _image_name_aliases(player_name: str) -> List[str]:
+    """
+    Return additional name variants that might exist as filenames.
+    Keep it conservative + explicit to avoid wrong matches.
+    """
+    n = (player_name or "").strip()
+
+    aliases = []
+
+    # Explicit one-off alias
+    if n.lower() == "emian-johar semedo":
+        aliases.append("Emian Semedo")
+
+    return aliases
+
 CUSTOM_MAXES = {
     "Total distance (m)": 13750,
     "HI distance (m)": 1650,
@@ -1465,28 +1480,34 @@ def generate_radar_chart_for_player(
 
     return {lab: float(v) for lab, v in zip(labels, raw_vals)}
 
-
 def get_local_player_image_path(player_name: str, photos_dir: str) -> Optional[str]:
     if not player_name or not os.path.isdir(photos_dir):
         return None
 
-    candidates = [
-        f"{player_name}.png",
-        f"{player_name}.jpg",
-        f"{player_name}.jpeg",
-        f"{player_name.strip()}.png",
-    ]
+    # Build candidate names: exact + aliases
+    base_names = [player_name] + _image_name_aliases(player_name)
+
+    # Try common extensions for each base name
+    candidates = []
+    for bn in base_names:
+        candidates.extend([
+            f"{bn}.png",
+            f"{bn}.jpg",
+            f"{bn}.jpeg",
+            f"{bn.strip()}.png",
+        ])
 
     for name in candidates:
         p = os.path.join(photos_dir, name)
         if os.path.exists(p):
             return p
 
-    # case-insensitive fallback
-    target_low = f"{player_name.lower().strip()}.png"
-    for f in os.listdir(photos_dir):
-        if f.lower() == target_low:
-            return os.path.join(photos_dir, f)
+    # case-insensitive fallback (png only, matches your original logic)
+    for bn in base_names:
+        target_low = f"{bn.lower().strip()}.png"
+        for f in os.listdir(photos_dir):
+            if f.lower() == target_low:
+                return os.path.join(photos_dir, f)
 
     return None
 
