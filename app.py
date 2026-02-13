@@ -1357,7 +1357,7 @@ def fill_template_full(
         values=values,
         season_label="2025/2026",
         season_id_by_label=season_id_by_label,
-        teamwise_by_sid=totals_by_sid,   # <-- change this line
+        totals_by_sid=totals_by_sid,   # ✅ this keyword
         club_key="CLUB_2025/2026",
         g_key="G25/26",
         m_key="M25/26",
@@ -1369,7 +1369,7 @@ def fill_template_full(
         values=values,
         season_label="2024/2025",
         season_id_by_label=season_id_by_label,
-        teamwise_by_sid=totals_by_sid,   # <-- and this line
+        totals_by_sid=totals_by_sid,   # ✅ this keyword
         club_key="CLUB_2024/2025",
         g_key="G24/25",
         m_key="M24/25",
