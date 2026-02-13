@@ -660,23 +660,43 @@ def get_career_stats_totals_by_season_team(
     """
     Returns: {season_id: {team_name: {"GAMES","MINUTES","GOALS","ASSISTS"}}}
 
-    Uses SciSports metrics endpoints and SUMS across all competitions for the same season+team.
-    This is the API equivalent of selecting "Total" on the career-stats page.
+    Fixes double counting by:
+    1) If a "Total" row exists for a season+team -> use that only.
+    2) Otherwise, for each season+team+competition take MAX (rows are often cumulative),
+       then sum across competitions.
     """
     cs = api_get_json(
         api_base,
         token,
         "/api/v2/metrics/career-stats/players",
-        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 1000},
+        params={"PlayerIds": player_id, "SeasonIds": season_ids, "Limit": 2000},
     )
     items = items_of(cs)
 
-    out: Dict[int, Dict[str, Dict[str, int]]] = {}
+    # helper: read comp identity (id if possible, else name, else unknown)
+    def comp_key(it: dict) -> str:
+        comp = it.get("competition") or it.get("competitionGroup") or {}
+        cid = comp.get("id")
+        cname = (comp.get("name") or "").strip()
+        if cid is not None:
+            return f"id:{cid}"
+        if cname:
+            return f"name:{cname.lower()}"
+        # sometimes nested deeper
+        cname2 = ((it.get("competition") or {}).get("name") or "").strip()
+        return f"name:{cname2.lower()}" if cname2 else "unknown"
 
-    def ensure(sid: int, team: str) -> Dict[str, int]:
-        out.setdefault(sid, {})
-        out[sid].setdefault(team, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
-        return out[sid][team]
+    def is_total_row(it: dict) -> bool:
+        comp = it.get("competition") or it.get("competitionGroup") or {}
+        cname = (comp.get("name") or "").strip().lower()
+        # common patterns; adjust if your payload uses other labels
+        return cname in {"total", "all", "overall", "all competitions", "all competitions total"}
+
+    # Step 1: collect best "Total row" per (sid, team) if present
+    best_total: Dict[Tuple[int, str], Dict[str, int]] = {}
+
+    # Step 2: otherwise collect MAX per (sid, team, competition)
+    max_per_comp: Dict[Tuple[int, str, str], Dict[str, int]] = {}
 
     for it in items:
         sid = (it.get("season") or {}).get("id") or it.get("seasonId")
@@ -685,20 +705,62 @@ def get_career_stats_totals_by_season_team(
 
         team_name = ((it.get("team") or {}).get("name") or "").strip() or "Unknown"
         stats = it.get("stats") or {}
+        metrics = it.get("metrics") or {}
 
-        # career-stats often has different naming; we try multiple keys robustly.
         games = int(round(_find_stat(stats, ["matchesPlayed", "matchPlayed", "matches", "games"])))
-        minutes = int(round(_find_stat(stats, ["minutesPlayed", "minutes"])))
+        minutes = int(round(
+            max(
+                _find_stat(stats, ["minutesPlayed", "minutes"]),
+                _find_stat(metrics, ["minutesPlayed", "minutes"]),
+            )
+        ))
         goals = int(round(_find_stat(stats, ["goal", "goals", "goalNonPenalty", "goal_non_penalty"])))
         assists = int(round(_find_stat(stats, ["assist", "assists"])))
 
-        bucket = ensure(sid, team_name)
-        bucket["GAMES"] += games
-        bucket["MINUTES"] += minutes
-        bucket["GOALS"] += goals
-        bucket["ASSISTS"] += assists
+        row = {"GAMES": games, "MINUTES": minutes, "GOALS": goals, "ASSISTS": assists}
+
+        if is_total_row(it):
+            key2 = (sid, team_name)
+            prev = best_total.get(key2)
+            # keep the best total row (usually highest minutes)
+            if prev is None or row["MINUTES"] > prev["MINUTES"]:
+                best_total[key2] = row
+            continue
+
+        ck = comp_key(it)
+        key3 = (sid, team_name, ck)
+        prev = max_per_comp.get(key3)
+        if prev is None:
+            max_per_comp[key3] = row
+        else:
+            # rows are often cumulative -> take MAX, not SUM
+            prev["GAMES"] = max(prev["GAMES"], row["GAMES"])
+            prev["MINUTES"] = max(prev["MINUTES"], row["MINUTES"])
+            prev["GOALS"] = max(prev["GOALS"], row["GOALS"])
+            prev["ASSISTS"] = max(prev["ASSISTS"], row["ASSISTS"])
+
+    # Build final output
+    out: Dict[int, Dict[str, Dict[str, int]]] = {}
+
+    # If total rows exist, they win
+    for (sid, team), row in best_total.items():
+        out.setdefault(sid, {})
+        out[sid][team] = dict(row)
+
+    # Otherwise sum MAX-per-competition
+    for (sid, team, _ck), row in max_per_comp.items():
+        # don't overwrite total rows
+        if (sid, team) in best_total:
+            continue
+        out.setdefault(sid, {})
+        out[sid].setdefault(team, {"GAMES": 0, "MINUTES": 0, "GOALS": 0, "ASSISTS": 0})
+        out[sid][team]["GAMES"] += row["GAMES"]
+        out[sid][team]["MINUTES"] += row["MINUTES"]
+        out[sid][team]["GOALS"] += row["GOALS"]
+        out[sid][team]["ASSISTS"] += row["ASSISTS"]
 
     return out
+
 
 
 def get_games_minutes_goals_assists_by_season(
