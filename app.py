@@ -1555,10 +1555,11 @@ def _iter_shapes(container):
             for child in _iter_shapes(sh):
                 yield child
 
-def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
+def apply_position_coloring(prs, slide, ordered_positions: List[str], preferred_foot: str = "") -> None:
     if not ordered_positions:
         return
 
+    # right/left-foot tweak (we can add after this works)
     main_num = POSITION_TO_NUMBER.get(ordered_positions[0])
     secondary_nums = [
         POSITION_TO_NUMBER.get(p)
@@ -1566,17 +1567,15 @@ def apply_position_coloring(slide, ordered_positions: List[str]) -> None:
         if p in POSITION_TO_NUMBER
     ]
 
-    # --- Restrict to formation/pitch area (top-right) ---
-    W = slide.part.presentation.slide_width
-    H = slide.part.presentation.slide_height
+    # ✅ use prs, not slide.part.presentation
+    W = prs.slide_width
+    H = prs.slide_height
     x_min = int(W * 0.62)
     y_max = int(H * 0.38)
 
     for shape in _iter_shapes(slide):
         if not getattr(shape, "has_text_frame", False):
             continue
-
-        # Only shapes located in the top-right pitch box
         if not (shape.left >= x_min and shape.top <= y_max):
             continue
 
