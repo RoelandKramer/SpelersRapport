@@ -708,7 +708,7 @@ def build_personal_values(api_base: str, token: str, player_id: int) -> Dict[str
     }
 
   # Fallback: if 2022/2023 club is empty, copy 2023/2024 club
-  if not (values.get("CLUB_2022/2023") or "").strip():
+    if not (values.get("CLUB_2022/2023") or "").strip():
       values["CLUB_2022/2023"] = (values.get("CLUB_2023/2024") or "").strip()
 
 
